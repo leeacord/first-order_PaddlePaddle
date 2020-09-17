@@ -10,7 +10,7 @@ A Simple Implementation[in progressing] of First Order Motion Model in PaddlePad
 *(This model is converted from the official checkpoint, not trained from scratch.)*
 <br>Left -> Right: | Source Image | Driving Video | PaddlePaddle | Pytorch |
 
-- You can find more comparison results in ``src/test_file/``
+- You can find more comparison results in ``test_file/``
 
 Citation:
 
