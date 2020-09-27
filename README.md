@@ -1,4 +1,7 @@
 # first-order_PaddlePaddle
+
+**:warning:This repository has been deprecated, please use [PaddleGan](https://github.com/PaddlePaddle/PaddleGAN) instead**
+
 A Simple Implementation[in progressing] of First Order Motion Model in PaddlePaddle.
 
 - You can find the offical code in [here](https://github.com/AliaksandrSiarohin/first-order-model)
