@@ -14,7 +14,6 @@ from skimage import img_as_ubyte
 from modules.generator import OcclusionAwareGenerator
 from modules.keypoint_detector import KPDetector
 from animate import normalize_kp
-from scipy.spatial import ConvexHull
 
 
 if sys.version_info[0] < 3:
@@ -78,7 +77,8 @@ def make_animation(source_image, driving_video, generator, kp_detector, relative
     return predictions
 
 # def find_best_frame(source, driving, cpu=False):
-#     import face_alignment
+#     import face_alignment  #需要pytorch
+#     from scipy.spatial import ConvexHull
 
 #     def normalize_kp(kp):
 #         kp = kp - kp.mean(axis=0, keepdims=True)
@@ -102,56 +102,68 @@ def make_animation(source_image, driving_video, generator, kp_detector, relative
 #             frame_num = i
 #     return frame_num
 
-# if __name__ == "__main__":
-#     parser = ArgumentParser()
-#     parser.add_argument("--config", required=True, help="path to config")
-#     parser.add_argument("--checkpoint", default='vox-cpk.pth.tar', help="path to checkpoint to restore")
+if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument("--config", required=True, help="path to config")
+    parser.add_argument("--checkpoint", default='vox-cpk.pth.tar', help="path to checkpoint to restore")
+    parser.add_argument("--source_image", default='sup-mat/source.png', help="path to source image")
+    parser.add_argument("--driving_video", default='sup-mat/source.png', help="path to driving video")
+    parser.add_argument("--result_video", default='result.mp4', help="path to output")
+    parser.add_argument("--relative", dest="relative", action="store_true", help="use relative or absolute keypoint coordinates")
+    parser.add_argument("--adapt_scale", dest="adapt_scale", action="store_true", help="adapt movement scale based on convex hull of keypoints")
 
-#     parser.add_argument("--source_image", default='sup-mat/source.png', help="path to source image")
-#     parser.add_argument("--driving_video", default='sup-mat/source.png', help="path to driving video")
-#     parser.add_argument("--result_video", default='result.mp4', help="path to output")
+    # parser.add_argument("--find_best_frame", dest="find_best_frame", action="store_true", 
+    #                     help="Generate from the frame that is the most alligned with source. (Only for faces, requires face_aligment lib)")
+
+    # parser.add_argument("--best_frame", dest="best_frame", type=int, default=None,  
+    #                     help="Set frame to start from.")
  
-#     parser.add_argument("--relative", dest="relative", action="store_true", help="use relative or absolute keypoint coordinates")
-#     parser.add_argument("--adapt_scale", dest="adapt_scale", action="store_true", help="adapt movement scale based on convex hull of keypoints")
-
-#     parser.add_argument("--find_best_frame", dest="find_best_frame", action="store_true", 
-#                         help="Generate from the frame that is the most alligned with source. (Only for faces, requires face_aligment lib)")
-
-#     parser.add_argument("--best_frame", dest="best_frame", type=int, default=None,  
-#                         help="Set frame to start from.")
- 
-#     parser.add_argument("--cpu", dest="cpu", action="store_true", help="cpu mode.")
+    parser.add_argument("--cpu", dest="cpu", action="store_true", help="cpu mode.")
  
 
-#     parser.set_defaults(relative=False)
-#     parser.set_defaults(adapt_scale=False)
+    parser.set_defaults(relative=False)
+    parser.set_defaults(adapt_scale=False)
 
-#     opt = parser.parse_args()
+    opt = parser.parse_args()
 
-#     source_image = imageio.imread(opt.source_image)
-#     reader = imageio.get_reader(opt.driving_video)
-#     fps = reader.get_meta_data()['fps']
-#     driving_video = []
-#     try:
-#         for im in reader:
-#             driving_video.append(im)
-#     except RuntimeError:
-#         pass
-#     reader.close()
+    source_image = imageio.imread(opt.source_image)
+    reader = imageio.get_reader(opt.driving_video)
+    try:
+        fps = reader.get_meta_data()['fps']
+        video_mode = True
+    except KeyError:
+        video_mode = False
+    driving_video = []
+    try:
+        for im in reader:
+            driving_video.append(im)
+    except RuntimeError:
+        pass
+    reader.close()
 
-#     source_image = resize(source_image, (256, 256))[..., :3]
-#     driving_video = [resize(frame, (256, 256))[..., :3] for frame in driving_video]
-#     generator, kp_detector = load_checkpoints(config_path=opt.config, checkpoint_path=opt.checkpoint, cpu=opt.cpu)
+    if opt.cpu:
+        plac = fluid.CPUPlace()
+    else:
+        plac = fluid.CUDAPlace(0)
+    with dygraph.guard(plac):
+        source_image = resize(source_image, (256, 256))[..., :3]
+        driving_video = [resize(frame, (256, 256))[..., :3] for frame in driving_video]
+        generator, kp_detector = load_checkpoints(config_path=opt.config)
 
-#     if opt.find_best_frame or opt.best_frame is not None:
-#         i = opt.best_frame if opt.best_frame is not None else find_best_frame(source_image, driving_video, cpu=opt.cpu)
-#         print ("Best frame: " + str(i))
-#         driving_forward = driving_video[i:]
-#         driving_backward = driving_video[:(i+1)][::-1]
-#         predictions_forward = make_animation(source_image, driving_forward, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, cpu=opt.cpu)
-#         predictions_backward = make_animation(source_image, driving_backward, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, cpu=opt.cpu)
-#         predictions = predictions_backward[::-1] + predictions_forward[1:]
-#     else:
-#         predictions = make_animation(source_image, driving_video, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, cpu=opt.cpu)
-#     imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in predictions], fps=fps)
+        # if opt.find_best_frame or opt.best_frame is not None:
+        #     i = opt.best_frame if opt.best_frame is not None else find_best_frame(source_image, driving_video, cpu=opt.cpu)
+        #     print ("Best frame: " + str(i))
+        #     driving_forward = driving_video[i:]
+        #     driving_backward = driving_video[:(i+1)][::-1]
+        #     predictions_forward = make_animation(source_image, driving_forward, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, cpu=opt.cpu)
+        #     predictions_backward = make_animation(source_image, driving_backward, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, cpu=opt.cpu)
+        #     predictions = predictions_backward[::-1] + predictions_forward[1:]
+        # else:
+        #     predictions = make_animation(source_image, driving_video, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, cpu=opt.cpu)
+        
+        predictions = make_animation(source_image, driving_video, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale)
+    if video_mode:
+        imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in predictions], fps=fps)
+    else:
+        imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in predictions])
 
