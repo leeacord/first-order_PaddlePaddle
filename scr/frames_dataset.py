@@ -1,61 +1,52 @@
-#====================
-# 测试模式下将固定输入图像
-TEST_MODE=False
-#====================
 import os
-from skimage import io, img_as_float32
+from skimage import io
 from skimage.color import gray2rgb
 from sklearn.model_selection import train_test_split
-from imageio import mimread,  imwrite
+from imageio import mimread, imwrite
 import pathlib
 import numpy as np
 import glob
 import time
-import matplotlib
+from matplotlib.colors import rgb_to_hsv, hsv_to_rgb
+import logging
 
-def read_video(name, frame_shape, saveto='folder', Fake=TEST_MODE):
+#====================
+# 测试模式下将固定输入图像
+TEST_MODE=False
+if TEST_MODE:
+    logging.warning('TEST MODE: input images is : np.ones((200, 256, 256, 3))*255')
+#====================
+
+def read_video(name, frame_shape, Fake=TEST_MODE, saveto='folder'):
     """
     Read video which can be:
       - an image of concatenated frames
       - '.mp4' and'.gif'
       - folder with videos
-      - saveto: 若为'folder',则会在数据集同目录下创建与视频文件同名的文件夹，并向其写入png图像序列，最后删除源视频文件
+      - saveto: 若为'folder',则会在数据集同目录下创建与视频文件同名的文件夹，并向其写入jpg图像序列，最后删除源视频文件
     """
     Name = name
     if Fake:
         # 因处理方式有所不同，此处填充值为255的uint8矩阵,pytorch中对应部分应为值为1的float32矩阵
-        video_array = (np.ones((200, 256, 256, 3))*255).astype(np.uint8)
-        # video_array = np.load('/home/aistudio/img.npy')[:, :, :, :3]
+        video_array = np.tile(np.load('/content/content/img.npy')[:1, ...], (2, 1, 1, 1))
+        # video_array = (np.ones((200, 256, 256, 3))*255).astype(np.uint8)
     elif os.path.isdir(name):
         frames = sorted(os.listdir(name))
         num_frames = len(frames)
         video_array = np.array(
             [io.imread(os.path.join(name, frames[idx]))[:, :, :3] for idx in range(num_frames)])
-    elif name.lower().endswith('.png') or name.lower().endswith('.jpg'):
-        # 数据集中没有单幅图像的数据，此elif部分未测试
-        image = io.imread(name)
-
-        if len(image.shape) == 2 or image.shape[2] == 1:
-            image = gray2rgb(image)
-        if image.shape[2] == 4:
-            image = image[..., :3]
-        # image = img_as_float32(image)
-        video_array = np.moveaxis(image, 1, 0)
-        video_array = video_array.reshape((-1,) + frame_shape)  
-        video_array = np.moveaxis(video_array, 1, 2)
     elif name.lower().endswith('.gif') or name.lower().endswith('.mp4') or name.lower().endswith('.mov'):  
         try:
             video = mimread(name)
         except Exception as err:
-            print('Error: %s'%str(err))
-            print('File: %s'%name)
+            logging.error('DataLoading File:%s Msg:%s'%(str(name), str(err)))
             return None
         if len(video[0].shape) == 3:
             if video[0].shape[-1] == 1:
-                video = [gray2rgb(frame) for frame in video]  # Is gray2rgb necessary?
+                video = [gray2rgb(frame) for frame in video]
         if video[0].shape[-1] == 4:
             video = [i[..., :3] for i in video]
-        video_array = np.array(video)  # type: list
+        video_array = np.array(video)
         if saveto == 'folder':
             sub_dir = pathlib.Path(name).with_suffix('')
             try:
@@ -63,26 +54,10 @@ def read_video(name, frame_shape, saveto='folder', Fake=TEST_MODE):
             except FileExistsError:
                 pass
             for idx, img in enumerate(video_array):
-                # 存为png
                 imwrite(sub_dir.joinpath('%i.png'%idx), img)
             pathlib.Path(Name).unlink()
-    elif name.lower().endswith('.npz'):
-        try:
-            video_array = np.load(name)['arr_0']
-        except Exception as err:
-            print('Error: %s'%str(err))
-            print('File: %s'%name)
-            return None
-    elif name.lower().endswith('.npy'):
-        try:
-            video_array = np.load(name)
-        except Exception as err:
-            print('Error: %s'%str(err))
-            print('File: %s'%name)
-            return None
     else:
-        raise Exception("Unknown file extensions  %s" % name)
-
+        raise Exception("Unknown dataset file extensions  %s" % name)
     return video_array
 
 
@@ -105,7 +80,7 @@ class FramesDataset:
         self.process_time = process_time
         if os.path.exists(os.path.join(root_dir, 'train')):
             assert os.path.exists(os.path.join(root_dir, 'test'))
-            print("Use predefined train-test split.")
+            logging.info("Use predefined train-test split.")
             if id_sampling:
                 train_videos = {os.path.basename(video).split('#')[0] for video in
                                 os.listdir(os.path.join(root_dir, 'train'))}
@@ -115,7 +90,7 @@ class FramesDataset:
             test_videos = os.listdir(os.path.join(root_dir, 'test'))
             self.root_dir = os.path.join(self.root_dir, 'train' if is_train else 'test')
         else:
-            print("Use random train-test split.")
+            logging.info("Use random train-test split.")
             train_videos, test_videos = train_test_split(self.videos, random_state=random_seed, test_size=0.2)
 
         if is_train:
@@ -137,11 +112,11 @@ class FramesDataset:
     def colorize(self, image, hue):
         """色相调整 输入范围[-1, 1]
         """
-        res = matplotlib.colors.rgb_to_hsv(image)
+        res = rgb_to_hsv(image)
         res[:, :, 0] = res[:, :, 0] + hue
         res[:, :, 0][res[:, :, 0]<0] = res[:, :, 0][res[:, :, 0]<0] + 1
         res[:, :, 0][res[:, :, 0]>1] = res[:, :, 0][res[:, :, 0]>1] - 1
-        res = matplotlib.colors.hsv_to_rgb(res)
+        res = hsv_to_rgb(res)
         return res
     
     def preload(self, idx):

@@ -1,7 +1,9 @@
-from modules.util import Hourglass, make_coordinate_grid, AntiAliasInterpolation2d, make_coordinate_grid_cpu
 import numpy as np
 from paddle import fluid
 from paddle.fluid import dygraph
+
+from modules.util import Hourglass, AntiAliasInterpolation2d, make_coordinate_grid_cpu
+
 
 class KPDetector(dygraph.Layer):
     """
@@ -52,12 +54,11 @@ class KPDetector(dygraph.Layer):
 
         feature_map = self.predictor(x)  # type: paddle.fluid.core_avx.VarBase
         prediction = self.kp(feature_map)   # type: paddle.fluid.core_avx.VarBase
-
         final_shape = prediction.shape
+        
         heatmap = fluid.layers.reshape(prediction, (final_shape[0], final_shape[1], -1))
         heatmap = fluid.layers.softmax(heatmap / self.temperature, axis=2)
         heatmap = fluid.layers.reshape(heatmap, final_shape)
-
         out = self.gaussian2kp(heatmap)
 
         if self.jacobian is not None:
@@ -65,12 +66,10 @@ class KPDetector(dygraph.Layer):
             jacobian_map = fluid.layers.reshape(jacobian_map,
                                                 (final_shape[0], self.num_jacobian_maps, 4, final_shape[2], final_shape[3]))
             heatmap = fluid.layers.unsqueeze(heatmap, [2])
-
+            
             jacobian = heatmap * jacobian_map
             jacobian = fluid.layers.reshape(jacobian, (final_shape[0], final_shape[1], 4, -1))
             jacobian = fluid.layers.reduce_sum(jacobian, dim=-1)
             jacobian = fluid.layers.reshape(jacobian, (jacobian.shape[0], jacobian.shape[1], 2, 2))
-
             out['jacobian'] = jacobian
-
         return out

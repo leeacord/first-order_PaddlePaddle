@@ -1,8 +1,7 @@
-from modules.util import kp2gaussian
-import paddle
-import numpy as np
 from paddle import fluid
 from paddle.fluid import dygraph
+
+from modules.util import kp2gaussian
 
 
 class DownBlock2d(dygraph.Layer):
@@ -15,15 +14,11 @@ class DownBlock2d(dygraph.Layer):
         self.conv = dygraph.Conv2D(in_features, out_features, filter_size=kernel_size)
 
         if sn:
-            # pdb.set_trace()
-            # self.conv = nn.utils.spectral_norm(self.conv)
             self.sn = dygraph.SpectralNorm(self.conv.weight.shape, dim=0)
         else:
             self.sn = None
         if norm:
-            # pdb.set_trace()
             self.norm = dygraph.InstanceNorm(num_channels=out_features, epsilon=1e-05, dtype='float32')
-            # self.norm = nn.InstanceNorm2d(out_features, affine=True)
         else:
             self.norm = None
 
@@ -32,11 +27,9 @@ class DownBlock2d(dygraph.Layer):
     def forward(self, x):
         out = x
         if self.sn is not None:
-            # pdb.set_trace()
             self.conv.weight.set_value(self.sn(self.conv.weight))
         out = self.conv(out)
         if self.norm is not None:
-            # pdb.set_trace()
             out = self.norm(out)
         out = fluid.layers.leaky_relu(out, 0.2)
         if self.pool:
@@ -61,7 +54,6 @@ class Discriminator(dygraph.Layer):
                             norm=(i != 0), kernel_size=4, pool=(i != num_blocks - 1), sn=sn))
 
         self.down_blocks = dygraph.LayerList(down_blocks)
-        # pdb.set_trace()
         self.conv = dygraph.Conv2D(self.down_blocks[len(self.down_blocks) - 1].conv.parameters()[0].shape[0], 1, filter_size=1)
         if sn:
             self.sn = dygraph.SpectralNorm(self.conv.parameters()[0].shape, dim=0)
@@ -76,14 +68,12 @@ class Discriminator(dygraph.Layer):
         if self.use_kp:
             heatmap = kp2gaussian(kp, x.shape[2:], self.kp_variance)
             out = fluid.layers.concat([out, heatmap], axis=1)
-
         for down_block in self.down_blocks:
             feature_maps.append(down_block(out))
             out = feature_maps[-1]
         if self.sn is not None:
             self.conv.weight.set_value(self.sn(self.conv.parameters()[0]))
         prediction_map = self.conv(out)
-        
         return feature_maps, prediction_map
 
 
