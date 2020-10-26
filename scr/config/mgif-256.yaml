@@ -68,10 +68,10 @@ model_params:
 train_params:
   num_epochs: 100
   num_repeats: 10
-  epoch_milestones: [1, 90]
-  lr_generator: 0
-  lr_discriminator: 0
-  lr_kp_detector: 0
+  epoch_milestones: [60, 90]
+  lr_generator: 2.0e-4
+  lr_discriminator: 2.0e-4
+  lr_kp_detector: 2.0e-4
  
   batch_size: 16
   scales: [1, 0.5, 0.25, 0.125]

@@ -20,7 +20,7 @@ from modules.keypoint_detector import KPDetector
 
 if paddle.version.full_version == '1.8.4':
     from paddle.fluid.dygraph.learning_rate_scheduler import MultiStepDecay
-elif paddle.version.full_version == '0.0.0':
+elif paddle.version.major == '2':
     from paddle.fluid.dygraph import MultiStepDecay
 from modules.model import GeneratorFullModel, DiscriminatorFullModel
 
@@ -33,7 +33,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     train_params = config['train_params']
     
     # learning_rate_scheduler
-    if paddle.version.full_version in ['1.8.4', '0.0.0', '1.8.2', '1.8.0']:
+    if paddle.version.full_version in ['1.8.4'] or paddle.version.major == '2':
         gen_lr = MultiStepDecay(learning_rate=train_params['lr_generator'],
                                 milestones=train_params['epoch_milestones'], decay_rate=0.1)
         dis_lr = MultiStepDecay(learning_rate=train_params['lr_discriminator'],
@@ -94,10 +94,6 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     _dataset = fluid.io.xmap_readers(dataset.getSample, indexGenertaor, process_num=4, buffer_size=128, order=False)
     _dataset = fluid.io.batch(_dataset, batch_size=train_params['batch_size'], drop_last=True)
     dataloader = fluid.io.buffered(_dataset, 1)
-    
-    # create model
-    generator_full = GeneratorFullModel(kp_detector, generator, discriminator, train_params)
-    discriminator_full = DiscriminatorFullModel(kp_detector, generator, discriminator, train_params)
     
     ###### Restore Part ######
     ckpt_config = config['ckpt_model']
@@ -190,6 +186,10 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             logging.info('Discriminator is loaded from *.pdparams')
     ###### Restore Part END ######
     
+    # create model
+    generator_full = GeneratorFullModel(kp_detector, generator, discriminator, train_params)
+    discriminator_full = DiscriminatorFullModel(kp_detector, generator, discriminator, train_params)
+    
     generator_full.train()
     discriminator_full.train()
     for epoch in trange(start_epoch, train_params['num_epochs']):
@@ -203,9 +203,9 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                     x[_key] = np.stack([_v[_key] for _v in _x], axis=0)
             # import pdb;pdb.set_trace();
             if TEST_MODE:
-                logging.warning('TEST MODE: Input Images is Fixed == 2. train.py: L207')
-                x['driving'] = dygraph.to_variable(np.transpose(np.tile(np.load('./img.npy')[:1, ...], (2, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2)))
-                x['source'] = dygraph.to_variable(np.transpose(np.tile(np.load('./img.npy')[:1, ...], (2, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2)))
+                logging.warning('TEST MODE: Input Images is Fixed train.py: L207')
+                x['driving'] = dygraph.to_variable(np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (2, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))) #Shape:[2, 3, 256, 256]
+                x['source'] = dygraph.to_variable(np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (2, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))) #Shape:[2, 3, 256, 256]
                 x['name'] = ['test1', 'test2']
             # train generator
             losses_generator, generated = generator_full(x.copy())
@@ -213,6 +213,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             loss = fluid.layers.sum(loss_values)
             if TEST_MODE:
                 print('Check Generator Loss')
+                print('\n'.join(['%s:%1.5f'%(k,v.numpy()) for k,v in zip(losses_generator.keys(), loss_values)]))
                 import pdb;pdb.set_trace();
             loss.backward()
             optimizer_generator.minimize(loss)
@@ -228,6 +229,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                 loss = fluid.layers.sum(loss_values)
                 if TEST_MODE:
                     print('Check Discriminator Loss')
+                    print('\n'.join(['%s:%1.5f'%(k,v.numpy()) for k,v in zip(losses_discriminator.keys(), loss_values)]))
                     import pdb;pdb.set_trace();
                 loss.backward()
                 optimizer_discriminator.minimize(loss)
@@ -252,7 +254,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             paddle.fluid.save_dygraph(optimizer_discriminator.state_dict(), os.path.join(save_dir, 'epoch%i/D' % epoch))
             paddle.fluid.save_dygraph(optimizer_kp_detector.state_dict(), os.path.join(save_dir, 'epoch%i/KP' % epoch))
             logging.info('Model is saved to:%s' % os.path.join(save_dir, 'epoch%i/' % epoch))
-        if paddle.version.full_version in ['1.8.4', '0.0.0', '1.8.2', '1.8.0']:
+        if paddle.version.full_version in ['1.8.4'] or paddle.version.major == '2':
             gen_lr.epoch()
             dis_lr.epoch()
             kp_lr.epoch()
@@ -271,7 +273,6 @@ if __name__ == "__main__":
     #                     help="Names of the devices comma separated.")
     parser.add_argument("--preload", action='store_true', help="preload dataset to RAM")
     parser.set_defaults(verbose=False)
-    # opt = parser.parse_args(args=['--config', './config/mgif-256.yaml'])
     opt = parser.parse_args()
     with open(opt.config) as f:
         config = yaml.load(f)
