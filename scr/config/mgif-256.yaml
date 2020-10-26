@@ -1,6 +1,6 @@
 dataset_params:
-  root_dir: ../dataset/moving-gif
-  # root_dir: ../dataset/moving-gif_gif
+  # 数据集路径，请保证该目录下有train和test两个子文件夹，并将数据与对应置入
+  root_dir: /home/aistudio/work/dataset/moving-gif
   frame_shape: [256, 256, 3]
   id_sampling: False
   augmentation_params:
@@ -14,19 +14,27 @@ dataset_params:
     jitter_param:
       hue: 0.5
 ckpt_model:
-  # npz文件为pytorch版本预训练模型的参数文件,pdparams为pp检查点
   # start_epoch 仅在恢复训练时需要填写
-  # 从头训练时,generator/discriminator/kp的地址留空
   start_epoch: 
-  generator: /home/aistudio/work/pre-trained/mgif/G_param.npz
+  # vgg19_model 为与原文一致采用原文的预训练模型
   vgg19_model: /home/aistudio/work/pre-trained/vgg19_np.npz
-  kp: /home/aistudio/work/pre-trained/mgif/KP_param.npz
+  # generator/discriminator/kp同时兼容pytorch的预训练模型（采用npz作为中转载体）和paddle的检查点（pdparams则为pp检查点）
+  # generator/discriminator/kp的地址若已指定则会尝试读取该模型，以下给出三个例子
+  
+  # 使用原文预训练模型
+  generator: /home/aistudio/work/pre-trained/mgif/G_param.npz
   discriminator: /home/aistudio/work/pre-trained/mgif/D_param.npz
-  # PP训练模型 epoch100时的结果
-  # generator: /home/aistudio/work/ckpt/mgif/G1_99.pdparams
-  # discriminator: /home/aistudio/work/ckpt/mgif/D1_99.pdparams
-  # kp: /home/aistudio/work/ckpt/mgif/kp1_99.pdparams
-  # vgg19_model: /home/aistudio/work/pre-trained/vgg19_np.npz
+  kp: /home/aistudio/work/pre-trained/mgif/KP_param.npz
+  
+  # PP训练模型
+  # generator: /home/aistudio/train_ckpt/epoch0/G.pdparams
+  # discriminator: /home/aistudio/train_ckpt/epoch0/D.pdparams
+  # kp: /home/aistudio/train_ckpt/epoch0/KP.pdparams
+  
+  # 从头训练
+  # generator:
+  # discriminator:
+  # kp:
 model_params:
   common_params:
     num_kp: 10
@@ -61,11 +69,11 @@ train_params:
   num_epochs: 100
   num_repeats: 10
   epoch_milestones: [1, 90]
-  lr_generator: 2.0e-4
-  lr_discriminator: 2.0e-4
-  lr_kp_detector: 2.0e-4
+  lr_generator: 0
+  lr_discriminator: 0
+  lr_kp_detector: 0
  
-  batch_size: 28
+  batch_size: 16
   scales: [1, 0.5, 0.25, 0.125]
   checkpoint_freq: 100
   transform_params:
@@ -80,6 +88,7 @@ train_params:
     equivariance_value: 10
     equivariance_jacobian: 10
 
+# 以下部分参数仅在reconstruction和animate模式中使用，当前未实现
 reconstruction_params:
   num_videos: 1000
   format: '.mp4'
@@ -91,7 +100,7 @@ animate_params:
     adapt_movement_scale: False
     use_relative_movement: True
     use_relative_jacobian: True
-
+# 可视化参数无效
 visualizer_params:
   kp_size: 5
   draw_border: True

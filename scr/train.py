@@ -267,8 +267,8 @@ if __name__ == "__main__":
     parser.add_argument("--mode", default="train", choices=["train"])
     # parser.add_argument("--mode", default="train", choices=["train", "reconstruction", "animate"])
     parser.add_argument("--save_dir", default='/home/aistudio/train_ckpt', help="path to save in")
-    parser.add_argument("--device_ids", default="0", type=lambda x: list(map(int, x.split(','))),
-                        help="Names of the devices comma separated.")
+    # parser.add_argument("--device_ids", default="0", type=lambda x: list(map(int, x.split(','))),
+    #                     help="Names of the devices comma separated.")
     parser.add_argument("--preload", action='store_true', help="preload dataset to RAM")
     parser.set_defaults(verbose=False)
     # opt = parser.parse_args(args=['--config', './config/mgif-256.yaml'])
