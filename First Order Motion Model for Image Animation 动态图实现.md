@@ -14,14 +14,17 @@
 
 ## 模型简介
 
-//[原项目链接](https://github.com/AliaksandrSiarohin/first-order-model)
-
 <p align="center">
-<img src="./mgif_result.gif"/> <br />
-Left -> Right: | Source Image | Driving Video | PaddlePaddle | Pytorch |
+<img src="doc/figure2.png"/> <br />
+    <font color='gray'>框架示意图 <a href='https://arxiv.org/pdf/2003.00196'>[来源]</a></font>
 </p>
 
+简要说明：
+1. 将源图像与驱动帧分别输入keypoint detector，分别得到关键点及二者对于参考帧$R$的局部仿射变换，并进一步计算二者的仿射变换$J_k$。
+2. 将源图像、关键点与仿射变换输入dense motion，得到optical flow与occlusion map。其中occlusion map用于指示需要被进行inpainting的部分。
+3. 结合dense motion输出以及源图像生成目标图像。
 
+[原项目链接](https://github.com/AliaksandrSiarohin/first-order-model)
 
 ## 代码结构
 ```
@@ -43,9 +46,7 @@ scr
 │   ├── generator.py
 │   ├── keypoint_detector.py
 │   ├── model.py
-│   ├── MultiStepLR.py          #自定义MultiStepLR
-│   ├── util.py
-│   └── vgg.py
+│   └── util.py
 └── train.py                    #训练脚本
 ```
 
@@ -53,6 +54,7 @@ scr
 ## 数据准备
 mgif: https://aistudio.baidu.com/aistudio/datasetdetail/47311
 fashion: https://aistudio.baidu.com/aistudio/datasetdetail/49174
+
 - 数据集的gif及视频请缩放到256px\*256px（yaml中可指定其他输入尺寸，但未经测试）
 
 - 请将训练集与测试集分别放入dataset对应的文件夹中（该路径可通过yaml配置文件修改）
@@ -75,9 +77,15 @@ dataset
 
 | 描述                                                         | 位置                                              | 当前方案                                                     |
 | ------------------------------------------------------------ | ------------------------------------------------- | ------------------------------------------------------------ |
-| `fluid.layers.grid_sampler`与torch不一致：<br>`paddle.fluid.layers.grid_sampler(x, grid, name=None)`默认采用双线性插值`F.grid_sample(input, grid, mode: str = 'bilinear', padding_mode: str = 'zeros', align_corners: bool = None)` | - generator.py<br>- dense_motion.py<br>- model.py | 采用fluid.layers.grid_sampler替代，同时TEST_MODE时设为指定输出 |
-| `fluid.layers.interpolate()`缺少align_corners选项            | - generator.py<br>-  util.py                      | 采用resize_nearest代替                                       |
-| 缺少部分op的二次梯度，`grad()`中无法设置`create_graph=True`  | modules.model.Transform.warp_coordinates          | 采用现有op建立一阶梯度计算图，并将一阶梯度作为参数传出，从而计算二阶梯度 |
+| `fluid.layers.grid_sampler`在`align_corners`上与torch可能不一致 | - generator.py<br>- dense_motion.py<br>- model.py | 采用fluid.layers.grid_sampler替代，同时TEST_MODE时设为指定输出 |
+| `fluid.layers.interpolate()`缺少align_corners选项            | - generator.py<br>- util.py                       | 采用resize_nearest代替                                       |
+| 缺少部分op的二次梯度，`grad()`中无法设置`create_graph=True`  | model.py: Transform.warp_coordinates              | 采用现有op建立一阶梯度计算图，并将一阶梯度作为参数传出，从而计算二阶梯度 |
+
+* 当前脚本中已预留测试模式，该模式下会固定输入数据、模型内随机数以及当前无法等效的op的输出，并会在warning中进行提示，如`fluid.layers.grid_sampler`。
+
+* 开启测试模式后，损失函数处会进入断点并打印各损失函数的值，便于原版模型进行对比。
+
+* 若要开启请令train.py/dense_motino.py/generator.py/model.py中开头部分的`TEST_MODE=True`
 
 数据准备完成后，通过如下方式启动训练：
 
@@ -98,9 +106,11 @@ train.py --config $PATH_TO_YAML_CONFIG [--save_dir $PATH_TO_SAVE] [--preload]
 - 当前存在反向传播问题，故仅与原版的推理结果进行对比，对比结果存放在test_file各文件夹下的result文件中
 
 <p align="center">
-<img src="./mgif_result.gif"/> <br />
-Left -> Right: | Source Image | Driving Video | PaddlePaddle | Pytorch |
+<img src="doc/mgif_result.gif"/> <br />
+从左至右: | Source Image | Driving Video | PaddlePaddle | Pytorch |
 </p>
+
+
 
 
 ## 模型推断
@@ -112,9 +122,9 @@ python demo.py --config $PATH_TO_YAML_CONFIG --source_image $PATH_TO_SOURCE_IMG 
 ```
 
 - 进行推理时模型会重新构建网络并载入预训练数据，请确保config的model_params部分与训练时一致，并在ckpt_model中指定各组件的模型路径。**一般只需指定generator和kp.**
-- 当前模型可导入pytorch的预训练模型，其具体转换方式在底部给出。
+- 当前模型可导入pytorch的预训练模型，在fashion/mgif/vox三个数据集上测试通过，[[已转换的预训练模型路径]](https://aistudio.baidu.com/aistudio/datasetdetail/57313)。具体转换方式在底部给出。原文模型地址为[[GDrive]](https://drive.google.com/open?id=1PyQJmkdCsAkOYwUyaj_l-l0as-iLDgeH) [[Yandex]](https://yadi.sk/d/lEw8uRm140L_eQ)
 - 保存的文件格式会根据result_video的扩展名调整，若未指定result_video，上述程序会将运行结果保存在./result.mp4文件中。对于gif格式的引导视频，建议以gif格式输出。
-- **【当前使用cpu推断出现问题，请勿使用】**使用CPU进行评估时，请加入 --cpu 参数。
+- :warning:当前使用cpu推断出现问题，请勿使用 使用CPU进行评估时，请加入 --cpu 参数。
 ```python
 # pytorch模型转换
 # mgif/vox/fashion模型已通过转换测试

@@ -10,14 +10,8 @@ import time
 from matplotlib.colors import rgb_to_hsv, hsv_to_rgb
 import logging
 
-#====================
-# 测试模式下将固定输入图像
-TEST_MODE=False
-if TEST_MODE:
-    logging.warning('TEST MODE: input images is : np.ones((200, 256, 256, 3))*255')
-#====================
 
-def read_video(name, frame_shape, Fake=TEST_MODE, saveto='folder'):
+def read_video(name, frame_shape, saveto='folder'):
     """
     Read video which can be:
       - an image of concatenated frames
@@ -26,11 +20,7 @@ def read_video(name, frame_shape, Fake=TEST_MODE, saveto='folder'):
       - saveto: 若为'folder',则会在数据集同目录下创建与视频文件同名的文件夹，并向其写入jpg图像序列，最后删除源视频文件
     """
     Name = name
-    if Fake:
-        # 因处理方式有所不同，此处填充值为255的uint8矩阵,pytorch中对应部分应为值为1的float32矩阵
-        video_array = np.tile(np.load('/content/content/img.npy')[:1, ...], (2, 1, 1, 1))
-        # video_array = (np.ones((200, 256, 256, 3))*255).astype(np.uint8)
-    elif os.path.isdir(name):
+    if os.path.isdir(name):
         frames = sorted(os.listdir(name))
         num_frames = len(frames)
         video_array = np.array(
@@ -215,13 +205,12 @@ class FramesDataset:
             a2 = time.process_time()
             print('Trans T:%1.5f'%(a2-a14))
         out['name'] = video_name
-        # print('Total: %1.4f'%(time.process_time()-a1))
         return out
 
     def getSample(self, idx):
         return self.__getitem__(idx)
 
-# TODO: Disable DatasetRepeater
+# TODO: DatasetRepeater
 # class DatasetRepeater(Dataset):
 #     """
 #     Pass several times over the same dataset for better i/o performance

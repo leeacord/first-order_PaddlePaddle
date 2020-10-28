@@ -76,14 +76,8 @@ class ResBlock2d(dygraph.Layer):
 
     def __init__(self, in_features, kernel_size, padding, **kwargs):
         super(ResBlock2d, self).__init__(**kwargs)
-        Conv2D = lambda in_channels, out_channels, kernel_size, padding: dygraph.Conv2D(num_channels=in_channels,
-                                                                                        num_filters=out_channels,
-                                                                                        filter_size=kernel_size,
-                                                                                        padding=padding)
-        self.conv1 = Conv2D(in_channels=in_features, out_channels=in_features, kernel_size=kernel_size,
-                            padding=padding)
-        self.conv2 = Conv2D(in_channels=in_features, out_channels=in_features, kernel_size=kernel_size,
-                            padding=padding)
+        self.conv1 = dygraph.Conv2D(num_channels=in_features, num_filters=in_features, filter_size=kernel_size, padding=padding)
+        self.conv2 = dygraph.Conv2D(num_channels=in_features, num_filters=in_features, filter_size=kernel_size, padding=padding)
         self.norm1 = dygraph.BatchNorm(num_channels=in_features, momentum=0.1)
         self.norm2 = dygraph.BatchNorm(num_channels=in_features, momentum=0.1)
 

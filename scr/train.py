@@ -27,7 +27,9 @@ from modules.model import GeneratorFullModel, DiscriminatorFullModel
 TEST_MODE = False
 if TEST_MODE:
     logging.warning('TEST MODE: train.py')
-    
+    # fake_input可随意指定,此处的batchsize=2
+    fake_input = np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (2, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))  #Shape:[2, 3, 256, 256]
+
 
 def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     train_params = config['train_params']
@@ -203,9 +205,9 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                     x[_key] = np.stack([_v[_key] for _v in _x], axis=0)
             # import pdb;pdb.set_trace();
             if TEST_MODE:
-                logging.warning('TEST MODE: Input Images is Fixed train.py: L207')
-                x['driving'] = dygraph.to_variable(np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (2, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))) #Shape:[2, 3, 256, 256]
-                x['source'] = dygraph.to_variable(np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (2, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))) #Shape:[2, 3, 256, 256]
+                logging.warning('TEST MODE: Input is Fixed train.py: L207')
+                x['driving'] = dygraph.to_variable(fake_input)
+                x['source'] = dygraph.to_variable(fake_input)
                 x['name'] = ['test1', 'test2']
             # train generator
             losses_generator, generated = generator_full(x.copy())
