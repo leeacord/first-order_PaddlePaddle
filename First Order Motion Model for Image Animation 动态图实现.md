@@ -28,7 +28,7 @@
 
 ## 代码结构
 ```
-scr
+src
 ├── animate.py
 ├── config                      #配置文件路径
 │   ├── bair-256.yaml
