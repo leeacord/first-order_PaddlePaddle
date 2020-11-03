@@ -94,12 +94,16 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     if has_key('generator'):
         if ckpt_config['generator'][-3:] == 'npz':
             G_param = np.load(ckpt_config['generator'], allow_pickle=True)['arr_0'].item()
-            G_param_clean = [(i, G_param[i]) for i in G_param if 'num_batches_tracked' not in i]
-            parameter_clean = generator.parameters()
-            del (parameter_clean[65])  # The parameters in AntiAliasInterpolation2d is not in dict_set and should be ignore.
-            for v, b in zip(parameter_clean, G_param_clean):
-                v.set_value(b[1])
-            logging.info('Generator is loaded from *.npz')
+            G_param_clean = dict([(i, G_param[i]) for i in G_param if 'num_batches_tracked' not in i])
+            # shape comparsion
+            diff_num = np.array([list(i.shape) != list(j.shape) for i, j in zip(generator.state_dict().values(), G_param_clean.values())]).sum()
+            if diff_num == 0:
+                # rename key
+                assign_dict = dict([(i[0], j[1]) for i, j in zip(generator.state_dict().items(), G_param_clean.items())])
+                generator.set_state_dict(assign_dict)
+                logging.info('Generator is loaded from *.npz')
+            else:
+                logging.warning('Generator cannot load from *.npz')
         else:
             param, optim = fluid.load_dygraph(ckpt_config['generator'])
             generator.set_dict(param)
@@ -174,7 +178,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     generator_full = GeneratorFullModel(kp_detector, generator, discriminator, train_params)
     discriminator_full = DiscriminatorFullModel(kp_detector, generator, discriminator, train_params)
     if has_key('vgg19_model'):
-        vggVarList = [i for i in generator_full.vgg.parameters()][2:]
+        vggVarList = [i for i in generator_full.vgg.parameters()]
         paramset = np.load(ckpt_config['vgg19_model'], allow_pickle=True)['arr_0']
         for var, v in zip(vggVarList, paramset):
             if list(var.shape) == list(v.shape):

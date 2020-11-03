@@ -249,7 +249,6 @@ class AntiAliasInterpolation2d(paddle.nn.Layer):
         kernel = kernel.reshape(1, 1, *kernel.shape)
         kernel = kernel.repeat(channels, 0)  # [1, 1, *kernel.shape] -> [channels, 1, *kernel.shape]
         self.kernel_attr = fluid.ParamAttr(initializer=fluid.initializer.NumpyArrayInitializer(kernel), trainable=False)
-        self.kernel = self.create_parameter(kernel.shape, attr=self.kernel_attr, dtype="float32")
         self.groups = channels
         self.scale = scale
         self.conv = dygraph.Conv2D(channels, channels, filter_size=kernel.shape[-1], groups=self.groups,

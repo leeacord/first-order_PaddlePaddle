@@ -75,20 +75,14 @@ class Vgg19(paddle.nn.Layer):
         self.conv3 = conv_block(128, 256, nums[2], name="conv3_", use_bias=True if torch_version else False)
         self.conv4 = conv_block(256, 512, nums[3], name="conv4_", use_bias=True if torch_version else False)
         self.conv5 = conv_block(512, 512, nums[4], name="conv5_", use_bias=True if torch_version else False)
-        _a = fluid.ParamAttr(
-            initializer=fluid.initializer.NumpyArrayInitializer(np.array([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)),
-            trainable=False)
-        self.mean = self.create_parameter(shape=(1, 3, 1, 1), attr=_a, dtype="float32")
-        _a = fluid.ParamAttr(
-            initializer=fluid.initializer.NumpyArrayInitializer(np.array([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)),
-            trainable=False)
-        self.std = self.create_parameter(shape=(1, 3, 1, 1), attr=_a, dtype="float32")
+        self.mean = paddle.to_tensor(np.array([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1).astype(np.float32))
+        self.std = paddle.to_tensor(np.array([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1).astype(np.float32))
         if not requires_grad:
             for param in self.parameters():
                 param.stop_gradient = True
     
     def forward(self, x):
-        x = (x - fluid.layers.expand_as(self.mean, x)) / fluid.layers.expand_as(self.std, x)
+        x = (x - self.mean) / self.std
         feat, feat_1 = self.conv1(x)
         feat, feat_2 = self.conv2(feat)
         feat, feat_3 = self.conv3(feat)
