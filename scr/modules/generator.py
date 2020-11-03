@@ -2,15 +2,11 @@ import logging
 
 import paddle
 
-if paddle.version.major == '2':
-    PP_v2 = True
-    from paddle.nn import functional as F
-else:
-    PP_v2 = False
 from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d
 from modules.dense_motion import DenseMotionNetwork
 from paddle import fluid
 from paddle.fluid import dygraph
+from paddle.nn import functional as F
 
 TEST_MODE = False
 if TEST_MODE:
@@ -20,7 +16,7 @@ if TEST_MODE:
 # TODO: test OcclusionAwareGenerator
 # Programing......None
 
-class OcclusionAwareGenerator(dygraph.Layer):
+class OcclusionAwareGenerator(paddle.nn.Layer):
     """
     Generator that given source image and and keypoints try to transform image according to movement trajectories
     induced by keypoints. Generator follows Johnson architecture.
@@ -68,20 +64,15 @@ class OcclusionAwareGenerator(dygraph.Layer):
         _, _, h, w = inp.shape
         if h_old != h or w_old != w:
             deformation = fluid.layers.transpose(deformation, (0, 3, 1, 2))
-            if PP_v2:
-                deformation = F.interpolate(deformation, size=(h, w), mode='BILINEAR', align_corners=False)
-            else:
-                deformation = fluid.layers.interpolate(deformation, out_shape=(h, w), resample='BILINEAR')
+            deformation = F.interpolate(deformation, size=(h, w), mode='BILINEAR', align_corners=False)
             deformation = fluid.layers.transpose(deformation, (0, 2, 3, 1))
         if TEST_MODE:
-            import numpy as np
-            bf = fluid.layers.grid_sampler(inp, deformation)
-            return fluid.dygraph.to_variable(np.ones(bf.shape).astype(np.float32) * 2)
-        elif PP_v2:
-            # return fluid.layers.grid_sampler(inp, deformation)
-            return fluid.layers.grid_sampler(inp, deformation, mode='bilinear', padding_mode='zeros', align_corners=False)
+            bf = F.grid_sample(inp, deformation, mode='bilinear', padding_mode='zeros',
+                                             align_corners=True)
+            return bf
         else:
-            return fluid.layers.grid_sampler(inp, deformation)
+            return F.grid_sample(inp, deformation, mode='bilinear', padding_mode='zeros',
+                                             align_corners=True)
     
     def forward(self, source_image, kp_driving, kp_source):
         # Encoding (downsampling) part
@@ -106,10 +97,7 @@ class OcclusionAwareGenerator(dygraph.Layer):
             
             if occlusion_map is not None:
                 if out.shape[2] != occlusion_map.shape[2] or out.shape[3] != occlusion_map.shape[3]:
-                    if PP_v2:
-                        occlusion_map = F.interpolate(occlusion_map, size=out.shape[2:], mode='BILINEAR', align_corners=False)
-                    else:
-                        occlusion_map = fluid.layers.interpolate(occlusion_map, out_shape=out.shape[2:], resample='BILINEAR')
+                    occlusion_map = F.interpolate(occlusion_map, size=out.shape[2:], mode='BILINEAR', align_corners=False)
                 out = out * occlusion_map
             output_dict["deformed"] = self.deform_input(source_image, deformation)
         

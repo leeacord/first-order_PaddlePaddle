@@ -3,10 +3,9 @@ from modules.util import AntiAliasInterpolation2d, make_coordinate_grid
 import paddle
 import logging
 import numpy as np
+import paddle.nn.functional as F
 from paddle import fluid
 from paddle.fluid import dygraph
-
-PP_v2 = True if paddle.version.major == '2' else False
 
 logging.warning('Need second order derivative model.py:L170-258')
 TEST_MODE = False
@@ -14,7 +13,7 @@ if TEST_MODE:
     logging.warning('TEST MODE: model.py')
 
 
-class conv_block(dygraph.Layer):
+class conv_block(paddle.nn.Layer):
     def __init__(self, input_channels, num_filter, groups, name=None, use_bias=False):
         super(conv_block, self).__init__()
         self._layers = []
@@ -53,7 +52,7 @@ class conv_block(dygraph.Layer):
         return out, feat
 
 
-class Vgg19(dygraph.Layer):
+class Vgg19(paddle.nn.Layer):
     """
     Vgg19 network for perceptual loss. See Sec 3.3.
     """
@@ -98,14 +97,14 @@ class Vgg19(dygraph.Layer):
         return [feat_1, feat_2, feat_3, feat_4, feat_5]
 
 
-class ImagePyramide(dygraph.Layer):
+class ImagePyramide(paddle.nn.Layer):
     """
     Create image pyramide for computing pyramide perceptual loss. See Sec 3.3
     """
     
     def __init__(self, scales, num_channels):
         super(ImagePyramide, self).__init__()
-        self.downs = dygraph.LayerList()
+        self.downs = paddle.nn.LayerList()
         self.name_list = []
         for scale in scales:
             self.downs.add_sublayer(str(scale).replace('.', '-'), AntiAliasInterpolation2d(num_channels, scale))
@@ -128,8 +127,7 @@ class Transform:
         noise = fluid.layers.Normal(loc=[0], scale=[kwargs['sigma_affine']]).sample([bs, 2, 3])
         noise = fluid.layers.reshape(noise, (bs, 2, 3))
         if TEST_MODE:
-            logging.warning('TEST MODE: Transform.noise == np.ones model.py:L135')
-            noise = dygraph.to_variable(np.ones((bs, 2, 3)).astype(np.float32))
+            noise = paddle.to_tensor(np.ones((bs, 2, 3)).astype(np.float32))
         
         self.theta = noise + fluid.layers.reshape(fluid.layers.eye(2, 3), (1, 2, 3))
         self.bs = bs
@@ -139,8 +137,7 @@ class Transform:
             self.control_points = make_coordinate_grid((kwargs['points_tps'], kwargs['points_tps']), 'float32')
             self.control_points = fluid.layers.unsqueeze(self.control_points, [0])
             if TEST_MODE:
-                logging.warning('TEST MODE: Transform.control_params == np.ones model.py:L144')
-                self.control_params = dygraph.to_variable(np.ones((bs, 1, kwargs['points_tps'] ** 2)))
+                self.control_params = paddle.to_tensor(np.ones((bs, 1, kwargs['points_tps'] ** 2)).astype(np.float32))
             else:
                 buf = fluid.layers.Normal(loc=[0], scale=[kwargs['sigma_tps']]).sample(
                     [bs, 1, kwargs['points_tps'] ** 2])
@@ -155,97 +152,44 @@ class Transform:
         grid = fluid.layers.reshape(grid, (1, frame.shape[2] * frame.shape[3], 2))
         grid = fluid.layers.reshape(self.warp_coordinates(grid), (self.bs, frame.shape[2], frame.shape[3], 2))
         if TEST_MODE:
-            bf = fluid.layers.grid_sampler(frame, grid)
-            logging.warning('TEST MODE Output of fluid.layers.grid_sampler == 2. model:L152')
-            return fluid.dygraph.to_variable(np.ones(bf.shape).astype(np.float32) * 2)
-        # 0.0.0c 分支等待更新
-        elif PP_v2:
-            # return fluid.layers.grid_sampler(frame, grid)
-            return fluid.layers.grid_sampler(frame, grid, mode='bilinear', padding_mode='reflect', align_corners=False)
+            return F.grid_sample(frame, grid, mode='bilinear', padding_mode='reflection', align_corners=True)
         else:
-            return fluid.layers.grid_sampler(frame, grid)
+            return F.grid_sample(frame, grid, mode='bilinear', padding_mode='reflection', align_corners=True)
     
-    ## 使用grad()的正常版本（等待二阶更新）
-    # def warp_coordinates(self, coordinates):
-    #     # self.theta is float32
-    #     theta = self.theta.astype('float32')
-    #     theta = fluid.layers.unsqueeze(theta, 1)
-    #     coordinates = fluid.layers.unsqueeze(coordinates, -1)
-    #     # If x1:(1, 5, 2, 2), x2:(10, 100, 2, 1)
-    #     # torch.matmul can broadcast x1, x2 to (10, 100, ...)
-    #     # In PDPD, it should be done manually
-    #     theta_part_a = theta[:, :, :, :2]
-    #     theta_part_b = theta[:, :, :, 2:]
-    #     # Use broadcast_v1 instead
-    #     transformed = fluid.layers.matmul(*broadcast_v1(theta_part_a, coordinates)) + theta_part_b
-    #     transformed = fluid.layers.squeeze(transformed, [-1])
-    #     if self.tps:
-    #         control_points = self.control_points.astype('float32')
-    #         control_params = self.control_params.astype('float32')
-    #         distances = fluid.layers.reshape(coordinates, (coordinates.shape[0], -1, 1, 2)) - fluid.layers.reshape(
-    #             control_points, (1, 1, -1, 2))
-    #         distances = fluid.layers.reduce_sum(fluid.layers.abs(distances), -1)
-    
-    #         result = distances ** 2
-    #         result = result * fluid.layers.log(distances + 1e-6)
-    #         result = result * control_params
-    #         result = fluid.layers.reshape(fluid.layers.reduce_sum(result, 2), (self.bs, coordinates.shape[1], 1))
-    #         transformed = transformed + result
-    #     return transformed
-    
-    # def jacobian(self, coordinates):
-    #     new_coordinates = self.warp_coordinates(coordinates)  # When batch_size is 5, the shape of coordinates and new_coordinates is (5, 10, 2)
-    #     # PDPD cannot use new_coordinates[..., 0]
-    #     assert len(new_coordinates.shape) == 3
-    #     grad_x = dygraph.grad(fluid.layers.reduce_sum(new_coordinates[:, :, 0]), coordinates, create_graph=True)
-    #     grad_y = dygraph.grad(fluid.layers.reduce_sum(new_coordinates[:, :, 1]), coordinates, create_graph=True)
-    #     jacobian = fluid.layers.concat([fluid.layers.unsqueeze(grad_x[0], -2), fluid.layers.unsqueeze(grad_y[0], -2)],
-    #                                    axis=-2)
-    #     return jacobian
-    
-    ## 手算一阶导的魔改版本
-    def warp_coordinates(self, coordinates_in, need_grad=False):
-        in_shape = coordinates_in.shape
+    def warp_coordinates(self, coordinates):
         theta = self.theta.astype('float32')
-        theta = fluid.layers.reshape(theta, (theta.shape[0], 1, theta.shape[1], theta.shape[2]))
-        coordinates = fluid.layers.reshape(coordinates_in, (*coordinates_in.shape, 1))
-        theta_parta = theta[:, :, :, :2]
-        transformed = fluid.layers.matmul(*broadcast_v1(theta_parta, coordinates)) + theta[:, :, :, 2:]
+        theta = fluid.layers.unsqueeze(theta, 1)
+        coordinates = fluid.layers.unsqueeze(coordinates, -1)
+        # If x1:(1, 5, 2, 2), x2:(10, 100, 2, 1)
+        # torch.matmul can broadcast x1, x2 to (10, 100, ...)
+        # In PDPD, it should be done manually
+        theta_part_a = theta[:, :, :, :2]
+        theta_part_b = theta[:, :, :, 2:]
+        # Use broadcast_v1 instead
+        transformed = fluid.layers.matmul(*broadcast_v1(theta_part_a, coordinates)) + theta_part_b
         transformed = fluid.layers.squeeze(transformed, [-1])
         if self.tps:
             control_points = self.control_points.astype('float32')
             control_params = self.control_params.astype('float32')
-            _a = fluid.layers.reshape(coordinates, (coordinates.shape[0], -1, 1, 2))
-            distances_0 = _a - fluid.layers.reshape(control_points, (1, 1, -1, 2))
-            distances_1 = fluid.layers.abs(distances_0)
-            distances = fluid.layers.reduce_mean(distances_1, -1) * fluid.dygraph.to_variable(
-                np.array([distances_1.shape[-1]]).astype(np.float32))
-            result0 = distances * distances
-            result1 = result0 * fluid.layers.log(distances + 1e-6)
-            result2 = result1 * control_params
-            result3 = fluid.layers.reshape(fluid.layers.reduce_mean(result2, 2) * fluid.dygraph.to_variable(np.array([result2.shape[2]]).astype(np.float32)), (self.bs, coordinates.shape[1], 1))
-            transformed = transformed + result3
-        if need_grad:
-            _theta_part_a, _ = broadcast_v1(theta_parta, coordinates)
-            _buf = _theta_part_a
-            Dtransformed_0_Din = fluid.layers.unsqueeze(fluid.layers.reduce_mean(_buf[:, :, 0, :], [0]), [0])
-            Dtransformed_1_Din = fluid.layers.unsqueeze(fluid.layers.reduce_mean(_buf[:, :, 1, :], [0]), [0])
-            if self.tps:
-                bool_mat = distances_0 > fluid.dygraph.to_variable(np.array([0]).astype(np.float32))
-                A = (fluid.dygraph.grad(result3, result1, create_graph=True)[0] * (fluid.dygraph.grad(fluid.layers.reduce_mean(result0) * fluid.dygraph.to_variable(np.prod(result0.shape).astype(np.float32).reshape(1)), distances, create_graph=True)[0] * fluid.layers.log(distances + 1e-6) + result0 * 1 / (distances + 1e-6)))
-                A2 = fluid.layers.unsqueeze(A, [-1])
-                A3 = A2 * (bool_mat.astype('float32') * 2 - 1)
-                A4 = fluid.layers.reduce_sum(A3, -2)
-                A5 = fluid.layers.reshape(A4, in_shape)
-                return transformed, (Dtransformed_0_Din + A5, Dtransformed_1_Din + A5)
-            else:
-                return transformed, (Dtransformed_0_Din, Dtransformed_1_Din)
+            distances = fluid.layers.reshape(coordinates, (coordinates.shape[0], -1, 1, 2)) - fluid.layers.reshape(
+                control_points, (1, 1, -1, 2))
+            distances = fluid.layers.reduce_sum(fluid.layers.abs(distances), -1)
+    
+            result = distances * distances
+            result = result * fluid.layers.log(distances + 1e-6)
+            result = result * control_params
+            result = fluid.layers.reshape(fluid.layers.reduce_sum(result, 2), (self.bs, coordinates.shape[1], 1))
+            transformed = transformed + result
         return transformed
     
     def jacobian(self, coordinates):
-        new_coordinates, (grad_x, grad_y) = self.warp_coordinates(coordinates, True)
+        new_coordinates = self.warp_coordinates(coordinates)  # When batch_size is 5, the shape of coordinates and new_coordinates is (5, 10, 2)
+        # PDPD cannot use new_coordinates[..., 0]
         assert len(new_coordinates.shape) == 3
-        jacobian = fluid.layers.concat([fluid.layers.unsqueeze(grad_x, [-2]), fluid.layers.unsqueeze(grad_y, [-2])], axis=-2)
+        grad_x = dygraph.grad(fluid.layers.reduce_sum(new_coordinates[:, :, 0]), coordinates, create_graph=True)
+        grad_y = dygraph.grad(fluid.layers.reduce_sum(new_coordinates[:, :, 1]), coordinates, create_graph=True)
+        jacobian = fluid.layers.concat([fluid.layers.unsqueeze(grad_x[0], -2), fluid.layers.unsqueeze(grad_y[0], -2)],
+                                       axis=-2)
         return jacobian
 
 
@@ -253,7 +197,7 @@ def detach_kp(kp):
     return {key: value.detach() for key, value in kp.items()}
 
 
-class GeneratorFullModel(dygraph.Layer):
+class GeneratorFullModel(paddle.nn.Layer):
     """
     Merge all generator related updates into single model for better multi-gpu usage
     """
@@ -334,10 +278,7 @@ class GeneratorFullModel(dygraph.Layer):
             if self.loss_weights['equivariance_jacobian'] != 0:
                 jacobian_transformed = fluid.layers.matmul(
                     *broadcast_v1(transform.jacobian(transformed_kp['value']), transformed_kp['jacobian']))
-                if PP_v2:
-                    normed_driving = paddle.inverse(kp_driving['jacobian'])
-                else:
-                    normed_driving = _inverse(kp_driving['jacobian'])
+                normed_driving = paddle.inverse(kp_driving['jacobian'])
                 normed_transformed = jacobian_transformed
                 value = fluid.layers.matmul(*broadcast_v1(normed_driving, normed_transformed))
                 eye = dygraph.to_variable(fluid.layers.reshape(fluid.layers.eye(2, 2, dtype='float32'), (1, 1, 2, 2)))
@@ -347,7 +288,7 @@ class GeneratorFullModel(dygraph.Layer):
         return loss_values, generated
 
 
-class DiscriminatorFullModel(dygraph.Layer):
+class DiscriminatorFullModel(paddle.nn.Layer):
     """
     Merge all discriminator related updates into single model for better multi-gpu usage
     """
@@ -396,16 +337,3 @@ def broadcast_v1(x, y):
     x_bc = fluid.layers.expand(x, (*((max_shape / np.array(dim_x)).astype(np.int32).tolist()), 1, 1)).astype('float32')
     y_bc = fluid.layers.expand(y, (*((max_shape / np.array(dim_y)).astype(np.int32).tolist()), 1, 1)).astype('float32')
     return x_bc, y_bc
-
-def _inverse(x):
-    """手动求逆以兼容1.8.x集群
-    """
-    assert x.shape[-1] == 2 and x.shape[-2] == 2
-    buf = fluid.layers.reshape(x, (-1, *(x.shape[-2:])))
-    a, b, c, d = buf[:, 0, 0], buf[:, 1, 1], buf[:, 0, 1], buf[:, 1, 0]
-    div = fluid.layers.reshape(a * b - c * d, (-1, 1, 1))
-    n_a, n_b, n_c, n_d = b, a, -c, -d
-    colum_0 = fluid.layers.stack([n_a, n_d], axis=-1)
-    colum_1 = fluid.layers.stack([n_c, n_b], axis=-1)
-    mat = fluid.layers.stack([colum_0, colum_1], axis=-1) / div
-    return fluid.layers.reshape(mat, x.shape)

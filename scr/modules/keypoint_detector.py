@@ -1,11 +1,12 @@
 import numpy as np
+import paddle
 from paddle import fluid
 from paddle.fluid import dygraph
 
 from modules.util import Hourglass, AntiAliasInterpolation2d, make_coordinate_grid_cpu
 
 
-class KPDetector(dygraph.Layer):
+class KPDetector(paddle.nn.Layer):
     """
     Detecting a keypoints. Return keypoint position and jacobian near each keypoint.
     """

@@ -18,10 +18,7 @@ from modules.keypoint_detector import KPDetector
 # from reconstruction import reconstruction
 # from animate import animate
 
-if paddle.version.full_version == '1.8.4':
-    from paddle.fluid.dygraph.learning_rate_scheduler import MultiStepDecay
-elif paddle.version.major == '2':
-    from paddle.fluid.dygraph import MultiStepDecay
+from paddle.optimizer.lr import MultiStepDecay
 from modules.model import GeneratorFullModel, DiscriminatorFullModel
 
 TEST_MODE = False
@@ -35,18 +32,12 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     train_params = config['train_params']
     
     # learning_rate_scheduler
-    if paddle.version.full_version in ['1.8.4'] or paddle.version.major == '2':
-        gen_lr = MultiStepDecay(learning_rate=train_params['lr_generator'],
-                                milestones=train_params['epoch_milestones'], decay_rate=0.1)
-        dis_lr = MultiStepDecay(learning_rate=train_params['lr_discriminator'],
-                                milestones=train_params['epoch_milestones'], decay_rate=0.1)
-        kp_lr = MultiStepDecay(learning_rate=train_params['lr_kp_detector'],
-                               milestones=train_params['epoch_milestones'], decay_rate=0.1)
-    else:
-        gen_lr = train_params['lr_generator']
-        dis_lr = train_params['lr_discriminator']
-        kp_lr = train_params['lr_kp_detector']
-    
+    gen_lr = MultiStepDecay(learning_rate=train_params['lr_generator'], milestones=train_params['epoch_milestones'],
+                            gamma=0.1)
+    dis_lr = MultiStepDecay(learning_rate=train_params['lr_discriminator'],
+                            milestones=train_params['epoch_milestones'], gamma=0.1)
+    kp_lr = MultiStepDecay(learning_rate=train_params['lr_kp_detector'],
+                           milestones=train_params['epoch_milestones'], gamma=0.1)
     # optimer
     if TEST_MODE:
         logging.warning('TEST MODE: Optimer is SGD, lr is 0.001. train.py: L50')
@@ -92,11 +83,11 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
         random.shuffle(order)
         for i in order:
             yield i
-    
+
     _dataset = fluid.io.xmap_readers(dataset.getSample, indexGenertaor, process_num=4, buffer_size=128, order=False)
     _dataset = fluid.io.batch(_dataset, batch_size=train_params['batch_size'], drop_last=True)
     dataloader = fluid.io.buffered(_dataset, 1)
-    
+
     ###### Restore Part ######
     ckpt_config = config['ckpt_model']
     has_key = lambda key: key in ckpt_config.keys() and ckpt_config[key] is not None
@@ -202,7 +193,6 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                     x[_key] = dygraph.to_variable(np.stack([_v[_key] for _v in _x], axis=0).astype(np.float32))
                 else:
                     x[_key] = np.stack([_v[_key] for _v in _x], axis=0)
-            # import pdb;pdb.set_trace();
             if TEST_MODE:
                 logging.warning('TEST MODE: Input is Fixed train.py: L207')
                 x['driving'] = dygraph.to_variable(fake_input)
@@ -255,13 +245,13 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             paddle.fluid.save_dygraph(optimizer_discriminator.state_dict(), os.path.join(save_dir, 'epoch%i/D' % epoch))
             paddle.fluid.save_dygraph(optimizer_kp_detector.state_dict(), os.path.join(save_dir, 'epoch%i/KP' % epoch))
             logging.info('Model is saved to:%s' % os.path.join(save_dir, 'epoch%i/' % epoch))
-        if paddle.version.full_version in ['1.8.4'] or paddle.version.major == '2':
-            gen_lr.epoch()
-            dis_lr.epoch()
-            kp_lr.epoch()
+        gen_lr.epoch()
+        dis_lr.epoch()
+        kp_lr.epoch()
 
 if __name__ == "__main__":
     plac = fluid.CUDAPlace(0)
+    paddle.set_device("gpu")
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
 
@@ -270,21 +260,15 @@ if __name__ == "__main__":
     parser.add_argument("--mode", default="train", choices=["train"])
     # parser.add_argument("--mode", default="train", choices=["train", "reconstruction", "animate"])
     parser.add_argument("--save_dir", default='/home/aistudio/train_ckpt', help="path to save in")
-    # parser.add_argument("--device_ids", default="0", type=lambda x: list(map(int, x.split(','))),
-    #                     help="Names of the devices comma separated.")
     parser.add_argument("--preload", action='store_true', help="preload dataset to RAM")
     parser.set_defaults(verbose=False)
     opt = parser.parse_args()
     with open(opt.config) as f:
         config = yaml.load(f)
 
-    with dygraph.guard(plac):
-        generator = OcclusionAwareGenerator(**config['model_params']['generator_params'],
-                                            **config['model_params']['common_params'])
-        discriminator = MultiScaleDiscriminator(**config['model_params']['discriminator_params'],
-                                                **config['model_params']['common_params'])
-        kp_detector = KPDetector(**config['model_params']['kp_detector_params'],
-                                **config['model_params']['common_params'])
+    generator = OcclusionAwareGenerator(**config['model_params']['generator_params'], **config['model_params']['common_params'])
+    discriminator = MultiScaleDiscriminator(**config['model_params']['discriminator_params'], **config['model_params']['common_params'])
+    kp_detector = KPDetector(**config['model_params']['kp_detector_params'], **config['model_params']['common_params'])
 
     dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'])
     if opt.preload:
@@ -300,9 +284,8 @@ if __name__ == "__main__":
 
     if opt.mode == 'train':
         logging.info("Start training...")
-        with dygraph.guard(plac):
-            save_dir = opt.save_dir
-            train(config, generator, discriminator, kp_detector, save_dir, dataset)
+        save_dir = opt.save_dir
+        train(config, generator, discriminator, kp_detector, save_dir, dataset)
     # elif opt.mode == 'reconstruction':
     #     print("Reconstruction...")
     #     reconstruction(config, generator, kp_detector, opt.checkpoint, log_dir, dataset)

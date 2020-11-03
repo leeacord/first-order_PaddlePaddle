@@ -1,12 +1,8 @@
 import paddle
-if paddle.version.major == '2':
-    PP_v2 = True
-    from paddle.nn import functional as F
-else:
-    PP_v2 = False
 import numpy as np
 from paddle import fluid
 from paddle.fluid import dygraph
+from paddle.nn import functional as F
 
 
 def kp2gaussian(kp, spatial_size, kp_variance: np.ndarray) -> np.ndarray:
@@ -69,7 +65,7 @@ make_coordinate_grid = lambda spatial_size, ttype: dygraph.to_variable(
 #     meshed = torch.cat([xx.unsqueeze_(2), yy.unsqueeze_(2)], 2)
 ######################################################################
 
-class ResBlock2d(dygraph.Layer):
+class ResBlock2d(paddle.nn.Layer):
     """
     Res block, preserve spatial resolution.
     """
@@ -92,7 +88,7 @@ class ResBlock2d(dygraph.Layer):
         return out
 
 
-class UpBlock2d(dygraph.Layer):
+class UpBlock2d(paddle.nn.Layer):
     """
     Upsampling block for use in decoder.
     """
@@ -108,17 +104,14 @@ class UpBlock2d(dygraph.Layer):
         self.norm = dygraph.BatchNorm(num_channels=out_features, momentum=0.1)
 
     def forward(self, x):
-        if PP_v2:
-            out = F.interpolate(x, scale_factor=2, mode='NEAREST', align_corners=False)
-        else:
-            out = fluid.layers.interpolate(x, scale=2, resample='NEAREST')
+        out = F.interpolate(x, scale_factor=2, mode='NEAREST', align_corners=False)
         out = self.conv(out)
         out = self.norm(out)
         out = fluid.layers.relu(out)
         return out
 
 
-class DownBlock2d(dygraph.Layer):
+class DownBlock2d(paddle.nn.Layer):
     """
     Downsampling block for use in encoder.
     """
@@ -137,7 +130,7 @@ class DownBlock2d(dygraph.Layer):
         return out
 
 
-class SameBlock2d(dygraph.Layer):
+class SameBlock2d(paddle.nn.Layer):
     """
     Simple block, preserve spatial resolution.
     """
@@ -155,7 +148,7 @@ class SameBlock2d(dygraph.Layer):
         return out
 
 
-class Encoder(dygraph.Layer):
+class Encoder(paddle.nn.Layer):
     """
     Hourglass Encoder
     """
@@ -168,7 +161,7 @@ class Encoder(dygraph.Layer):
             down_blocks.append(DownBlock2d(in_features if i == 0 else min(max_features, block_expansion * (2 ** i)),
                                            min(max_features, block_expansion * (2 ** (i + 1))),
                                            kernel_size=3, padding=1))
-        self.down_blocks = dygraph.LayerList(down_blocks)
+        self.down_blocks = paddle.nn.LayerList(down_blocks)
 
     def forward(self, x):
         outs = [x]
@@ -177,7 +170,7 @@ class Encoder(dygraph.Layer):
         return outs
 
 
-class Decoder(dygraph.Layer):
+class Decoder(paddle.nn.Layer):
     """
     Hourglass Decoder
     """
@@ -192,7 +185,7 @@ class Decoder(dygraph.Layer):
             out_filters = min(max_features, block_expansion * (2 ** i))
             up_blocks.append(UpBlock2d(in_filters, out_filters, kernel_size=3, padding=1))
 
-        self.up_blocks = dygraph.LayerList(up_blocks)
+        self.up_blocks = paddle.nn.LayerList(up_blocks)
         self.out_filters = block_expansion + in_features
 
     def forward(self, x):
@@ -205,7 +198,7 @@ class Decoder(dygraph.Layer):
         return out
 
 
-class Hourglass(dygraph.Layer):
+class Hourglass(paddle.nn.Layer):
     """
     Hourglass architecture.
     """
@@ -221,7 +214,7 @@ class Hourglass(dygraph.Layer):
 
 
 # TODO: 20200810
-class AntiAliasInterpolation2d(dygraph.Layer):
+class AntiAliasInterpolation2d(paddle.nn.Layer):
     """
     Band-limited downsampling, for better preservation of the input signal.
     """
@@ -270,8 +263,5 @@ class AntiAliasInterpolation2d(dygraph.Layer):
         out = fluid.layers.pad2d(input=input, paddings=[self.ka, self.kb, self.ka, self.kb], mode='constant')
         out = self.conv(out)
         # TODO: fluid.layers.interpolate IS NOT SAME WITH F.interpolate due to align_corners==True, use fluid.layers.resize_nearest instead.
-        if PP_v2:
-            out = F.interpolate(out, scale_factor=self.scale, mode='NEAREST', align_corners=False)
-        else:
-            out = fluid.layers.resize_nearest(out, scale=self.scale, align_corners=False)
+        out = F.interpolate(out, scale_factor=self.scale, mode='NEAREST', align_corners=False)
         return out

@@ -1,10 +1,11 @@
+import paddle
 from paddle import fluid
 from paddle.fluid import dygraph
 
 from modules.util import kp2gaussian
 
 
-class DownBlock2d(dygraph.Layer):
+class DownBlock2d(paddle.nn.Layer):
     """
     Simple block for processing video (encoder).
     """
@@ -37,7 +38,7 @@ class DownBlock2d(dygraph.Layer):
         return out
 
 
-class Discriminator(dygraph.Layer):
+class Discriminator(paddle.nn.Layer):
     """
     Discriminator similar to Pix2Pix
     """
@@ -53,7 +54,7 @@ class Discriminator(dygraph.Layer):
                             min(max_features, block_expansion * (2 ** (i + 1))),
                             norm=(i != 0), kernel_size=4, pool=(i != num_blocks - 1), sn=sn))
 
-        self.down_blocks = dygraph.LayerList(down_blocks)
+        self.down_blocks = paddle.nn.LayerList(down_blocks)
         self.conv = dygraph.Conv2D(self.down_blocks[len(self.down_blocks) - 1].conv.parameters()[0].shape[0], 1, filter_size=1)
         if sn:
             self.sn = dygraph.SpectralNorm(self.conv.parameters()[0].shape, dim=0)
@@ -77,7 +78,7 @@ class Discriminator(dygraph.Layer):
         return feature_maps, prediction_map
 
 
-class MultiScaleDiscriminator(dygraph.Layer):
+class MultiScaleDiscriminator(paddle.nn.Layer):
     """
     Multi-scale (scale) discriminator
     """
@@ -85,7 +86,7 @@ class MultiScaleDiscriminator(dygraph.Layer):
     def __init__(self, scales=(), **kwargs):
         super(MultiScaleDiscriminator, self).__init__()
         self.scales = scales
-        self.discs = dygraph.LayerList()
+        self.discs = paddle.nn.LayerList()
         self.nameList = []
         for scale in scales:
             self.discs.add_sublayer(str(scale).replace('.', '-'), Discriminator(**kwargs))

@@ -2,6 +2,7 @@ import logging
 
 import numpy as np
 import paddle
+import paddle.nn.functional as F
 from paddle import fluid
 from paddle.fluid import dygraph
 from modules.util import Hourglass, AntiAliasInterpolation2d, kp2gaussian, \
@@ -12,11 +13,6 @@ TEST_MODE = False
 if TEST_MODE:
     logging.warning('TEST MODE: dense_motion.py')
 # ====================
-
-if paddle.version.major == '2':
-    PP_v2 = True
-else:
-    PP_v2 = False
 
 
 def _repeat(inTensor, times):
@@ -29,7 +25,7 @@ def _repeat(inTensor, times):
         raise TypeError('Repeat in:%s out:%s' % (str(inTensor.shape), str(times)))
 
 
-class DenseMotionNetwork(dygraph.Layer):
+class DenseMotionNetwork(paddle.nn.Layer):
     """
     Module that predicting a dense motion from sparse motion representation given by kp_source and kp_driving
     """
@@ -70,17 +66,6 @@ class DenseMotionNetwork(dygraph.Layer):
         return heatmap
     
     def create_sparse_motions(self, source_image, kp_driving, kp_source):
-        def _inverse(x):
-            assert x.shape[-1] == 2 and x.shape[-2] == 2
-            buf = fluid.layers.reshape(x, (-1, *(x.shape[-2:])))
-            a, b, c, d = buf[:, 0, 0], buf[:, 1, 1], buf[:, 0, 1], buf[:, 1, 0]
-            div = fluid.layers.reshape(a * b - c * d, (-1, 1, 1))
-            n_a, n_b, n_c, n_d = b, a, -c, -d
-            colum_0 = fluid.layers.stack([n_a, n_d], axis=-1)
-            colum_1 = fluid.layers.stack([n_c, n_b], axis=-1)
-            mat = fluid.layers.stack([colum_0, colum_1], axis=-1) / div
-            return fluid.layers.reshape(mat, x.shape)
-        
         """
         Eq 4. in the paper T_{s<-d}(z)
         """
@@ -93,10 +78,7 @@ class DenseMotionNetwork(dygraph.Layer):
         coordinate_grid = fluid.layers.expand(identity_grid, (max_shape / np.array(identity_grid.shape)).astype(np.uint8).tolist()) - fluid.layers.expand(_buf,(max_shape / np.array(_buf.shape)).astype(np.uint8).tolist())
         
         if 'jacobian' in kp_driving:
-            if PP_v2:
-                jacobian = fluid.layers.matmul(kp_source['jacobian'], paddle.inverse(kp_driving['jacobian']))
-            else:
-                jacobian = fluid.layers.matmul(kp_source['jacobian'], _inverse(kp_driving['jacobian']))
+            jacobian = fluid.layers.matmul(kp_source['jacobian'], paddle.inverse(kp_driving['jacobian']))
             dim_1, dim_2, *else_dim = jacobian.shape
             jacobian = fluid.layers.reshape(jacobian, (-1, *else_dim))
             jacobian = fluid.layers.unsqueeze(fluid.layers.unsqueeze(jacobian, [-3]), [-3])
@@ -128,17 +110,11 @@ class DenseMotionNetwork(dygraph.Layer):
                                 (self.num_kp + 1, 1, 1, 1, 1))
         source_repeat = fluid.layers.reshape(source_repeat, (bs * (self.num_kp + 1), -1, h, w))
         sparse_motions = fluid.layers.reshape(sparse_motions, (bs * (self.num_kp + 1), h, w, -1))
-        # TODO: fluid.layers.grid_sampler IS NOT SAME WITH F.grid_sample due to align_corners==True, waiting for update.
-        if TEST_MODE:
-            logging.warning('TEST MODE: Output of fluid.layers.grid_sampler == 2. dense_motion.py: L135')
-            sparse_deformed = fluid.layers.grid_sampler(source_repeat, sparse_motions)
-            sparse_deformed.set_value(np.ones(sparse_deformed.shape).astype(np.float32) * 2)
-        elif PP_v2:
-            # TODO: WARNING grid_sampler IS NOT SAME WITH PYTORCH
-            sparse_deformed = fluid.layers.grid_sampler(source_repeat, sparse_motions)
-            # sparse_deformed = fluid.layers.grid_sampler(source_repeat, sparse_motions, mode='bilinear', padding_mode='zeros', align_corners=False)
-        else:
-            sparse_deformed = fluid.layers.grid_sampler(source_repeat, sparse_motions)
+        # TODO: fluid.layers.grid_sampler align_corners==True!!!
+        sparse_deformed = F.grid_sample(source_repeat, sparse_motions, mode='bilinear', padding_mode='zeros', align_corners=True)
+        # if TEST_MODE:
+        #     import pdb;pdb.set_trace()
+        #     logging.warning('Check')
         sparse_deformed = fluid.layers.reshape(sparse_deformed, (bs, self.num_kp + 1, -1, h, w))
         return sparse_deformed
     
@@ -173,29 +149,4 @@ class DenseMotionNetwork(dygraph.Layer):
         if self.occlusion:
             occlusion_map = fluid.layers.sigmoid(self.occlusion(prediction))
             out_dict['occlusion_map'] = occlusion_map
-        
         return out_dict
-
-########_inverse Test########
-# import paddle
-# from paddle import fluid
-# import numpy as np
-#
-# inv_value = np.tile(np.array([[1, 2], [3, 4]]).astype(np.float32).reshape(1, 2, 2), (4, 1, 1))
-# def test_np(inv_value):
-#     return np.linalg.inv(inv_value)
-# def test_pp(inv_value):
-#     def _inverse(x):
-#         assert x.shape[-1] == 2 and x.shape[-2] == 2
-#         buf = fluid.layers.reshape(x, (-1, *(x.shape[-2:])))
-#         a, b, c, d = buf[:, 0, 0], buf[:, 1, 1], buf[:, 0, 1], buf[:, 1, 0]
-#         div = fluid.layers.reshape(a * b - c * d, (-1, 1, 1))
-#         n_a, n_b, n_c, n_d = b, a, -c, -d
-#         colum_0 = fluid.layers.stack([n_a, n_d], axis=-1)
-#         colum_1 = fluid.layers.stack([n_c, n_b], axis=-1)
-#         mat = fluid.layers.stack([colum_0, colum_1], axis=-1) / div
-#         return fluid.layers.reshape(mat, x.shape)
-#     with paddle.fluid.dygraph.guard():
-#         value = _inverse(fluid.dygraph.to_variable(inv_value)).numpy()
-#     return value
-# print(np.array_equal(test_np(inv_value), test_pp(inv_value)))
