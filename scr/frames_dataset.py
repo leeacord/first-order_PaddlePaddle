@@ -9,6 +9,7 @@ import glob
 import time
 from matplotlib.colors import rgb_to_hsv, hsv_to_rgb
 import logging
+from paddle.io import Dataset
 
 
 def read_video(name, frame_shape, saveto='folder'):
@@ -34,8 +35,6 @@ def read_video(name, frame_shape, saveto='folder'):
         if len(video[0].shape) == 3:
             if video[0].shape[-1] == 1:
                 video = [gray2rgb(frame) for frame in video]
-        elif len(video[0].shape) == 2:
-            video = [gray2rgb(frame) for frame in video]
         if video[0].shape[-1] == 4:
             video = [i[..., :3] for i in video]
         video_array = np.array(video)
@@ -53,7 +52,7 @@ def read_video(name, frame_shape, saveto='folder'):
     return video_array
 
 
-class FramesDataset:
+class FramesDataset(Dataset):
     """
     Dataset of videos, each video can be represented as:
       - an image of concatenated frames
@@ -211,26 +210,26 @@ class FramesDataset:
             a2 = time.process_time()
             print('Trans T:%1.5f'%(a2-a14))
         out['name'] = video_name
-        return out
+        return out['driving'], out['source']
 
     def getSample(self, idx):
         return self.__getitem__(idx)
 
 # TODO: DatasetRepeater
-# class DatasetRepeater(Dataset):
-#     """
-#     Pass several times over the same dataset for better i/o performance
-#     """
-#
-#     def __init__(self, dataset, num_repeats=100):
-#         self.dataset = dataset
-#         self.num_repeats = num_repeats
-#
-#     def __len__(self):
-#         return self.num_repeats * self.dataset.__len__()
-#
-#     def __getitem__(self, idx):
-#         return self.dataset[idx % self.dataset.__len__()]
+class DatasetRepeater(Dataset):
+    """
+    Pass several times over the same dataset for better i/o performance
+    """
+
+    def __init__(self, dataset, num_repeats=100):
+        self.dataset = dataset
+        self.num_repeats = num_repeats
+
+    def __len__(self):
+        return self.num_repeats * self.dataset.__len__()
+
+    def __getitem__(self, idx):
+        return self.dataset[idx % self.dataset.__len__()]
 
 
 # class PairedDataset(Dataset):

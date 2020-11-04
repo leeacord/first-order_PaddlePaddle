@@ -11,7 +11,7 @@ import paddle.fluid.dygraph as dygraph
 from tqdm import trange
 import numpy as np
 
-from frames_dataset import FramesDataset
+from frames_dataset import FramesDataset, DatasetRepeater
 from modules.generator import OcclusionAwareGenerator
 from modules.discriminator import MultiScaleDiscriminator
 from modules.keypoint_detector import KPDetector
@@ -75,18 +75,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     logging.info('Start Epoch is :%i' % start_epoch)
     
     # dataset pipeline
-    def indexGenertaor():
-        """随机生成索引序列
-        """
-        order = list(range(len(dataset)))
-        order = order * train_params['num_repeats']
-        random.shuffle(order)
-        for i in order:
-            yield i
-
-    _dataset = fluid.io.xmap_readers(dataset.getSample, indexGenertaor, process_num=4, buffer_size=128, order=False)
-    _dataset = fluid.io.batch(_dataset, batch_size=train_params['batch_size'], drop_last=True)
-    dataloader = fluid.io.buffered(_dataset, 1)
+    dataloader = paddle.io.DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True, drop_last=False, num_workers=4, use_buffer_reader=True, use_shared_memory=False)
 
     ###### Restore Part ######
     ckpt_config = config['ckpt_model']
@@ -192,11 +181,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
         for _step, _x in enumerate(dataloader()):
             # prepear data
             x = dict()
-            for _key in _x[0].keys():
-                if str(_key) != 'name':
-                    x[_key] = dygraph.to_variable(np.stack([_v[_key] for _v in _x], axis=0).astype(np.float32))
-                else:
-                    x[_key] = np.stack([_v[_key] for _v in _x], axis=0)
+            x['driving'], x['source'] = _x
             if TEST_MODE:
                 logging.warning('TEST MODE: Input is Fixed train.py: L207')
                 x['driving'] = dygraph.to_variable(fake_input)
@@ -254,8 +239,8 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
         kp_lr.epoch()
 
 if __name__ == "__main__":
-    plac = fluid.CUDAPlace(0)
     paddle.set_device("gpu")
+    logging.getLogger().setLevel(logging.INFO)
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
 
@@ -275,6 +260,7 @@ if __name__ == "__main__":
     kp_detector = KPDetector(**config['model_params']['kp_detector_params'], **config['model_params']['common_params'])
 
     dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'])
+    dataset = DatasetRepeater(dataset, config['train_params']['num_repeats'])
     if opt.preload:
         logging.info('PreLoad Dataset: Start')
         pre_list = list(range(len(dataset)))
