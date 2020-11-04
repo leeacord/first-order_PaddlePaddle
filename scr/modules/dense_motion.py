@@ -6,7 +6,7 @@ import paddle.nn.functional as F
 from paddle import fluid
 from paddle.fluid import dygraph
 from modules.util import Hourglass, AntiAliasInterpolation2d, kp2gaussian, \
-    make_coordinate_grid_cpu
+    make_coordinate_grid
 
 # ====================
 TEST_MODE = False
@@ -70,9 +70,8 @@ class DenseMotionNetwork(paddle.nn.Layer):
         Eq 4. in the paper T_{s<-d}(z)
         """
         bs, _, h, w = source_image.shape
-        identity_grid = make_coordinate_grid_cpu((h, w), np.float32)
-        identity_grid = identity_grid.reshape(1, 1, h, w, 2)
-        identity_grid = dygraph.to_variable(identity_grid)
+        identity_grid = make_coordinate_grid((h, w))
+        identity_grid = identity_grid.reshape((1, 1, h, w, 2))
         _buf = fluid.layers.reshape(kp_driving['value'], (bs, self.num_kp, 1, 1, 2))
         max_shape = np.array([max(i, j) for i, j in zip(identity_grid.shape, _buf.shape)])
         coordinate_grid = fluid.layers.expand(identity_grid, (max_shape / np.array(identity_grid.shape)).astype(np.uint8).tolist()) - fluid.layers.expand(_buf,(max_shape / np.array(_buf.shape)).astype(np.uint8).tolist())

@@ -128,8 +128,7 @@ class Transform:
         
         if ('sigma_tps' in kwargs) and ('points_tps' in kwargs):
             self.tps = True
-            self.control_points = make_coordinate_grid((kwargs['points_tps'], kwargs['points_tps']), 'float32')
-            self.control_points = fluid.layers.unsqueeze(self.control_points, [0])
+            self.control_points = make_coordinate_grid((kwargs['points_tps'], kwargs['points_tps'])).unsqueeze(0)
             if TEST_MODE:
                 self.control_params = paddle.to_tensor(np.ones((bs, 1, kwargs['points_tps'] ** 2)).astype(np.float32))
             else:

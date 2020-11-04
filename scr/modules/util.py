@@ -10,23 +10,16 @@ def kp2gaussian(kp, spatial_size, kp_variance: np.ndarray) -> np.ndarray:
     Transform a keypoint into gaussian like representation
     BP is supported
     """
-    if isinstance(kp['value'], fluid.core_avx.VarBase):
-        mean = kp['value'].numpy()
-    elif isinstance(kp['value'], np.ndarray):
-        mean = kp['value']
-    else:
-        raise TypeError('TYPE of keypoint : %s is not supported' % type(kp['value']))
-
-    coordinate_grid = make_coordinate_grid_cpu(spatial_size, mean.dtype)
+    mean = kp['value']
+    coordinate_grid = make_coordinate_grid(spatial_size, mean.dtype)
     number_of_leading_dimensions = len(mean.shape) - 1
-    shape = (1,) * number_of_leading_dimensions + coordinate_grid.shape
-    coordinate_grid = coordinate_grid.reshape(*shape)
-    repeats = mean.shape[:number_of_leading_dimensions] + (1, 1, 1)
-    coordinate_grid = np.tile(coordinate_grid, repeats)
-    coordinate_grid = dygraph.to_variable(coordinate_grid)
+    shape = (1,) * number_of_leading_dimensions + tuple(coordinate_grid.shape)
+    coordinate_grid = coordinate_grid.reshape(shape)
+    repeats = tuple(mean.shape)[:number_of_leading_dimensions] + (1, 1, 1)
+    coordinate_grid = coordinate_grid.tile(repeats)
 
     # Preprocess kp shape
-    shape = mean.shape[:number_of_leading_dimensions] + (1, 1, 2)
+    shape = tuple(mean.shape)[:number_of_leading_dimensions] + (1, 1, 2)
     mean = fluid.layers.reshape(kp['value'], shape)
 
     mean_sub = (coordinate_grid - mean)
@@ -37,33 +30,26 @@ def kp2gaussian(kp, spatial_size, kp_variance: np.ndarray) -> np.ndarray:
     else:
         raise TypeError('TYPE of keypoint : %s is not supported' % type(kp_variance))
     out = fluid.layers.exp(-0.5 * fluid.layers.reduce_sum((mean_sub ** 2), -1) / kp_variance)
-
     return out
 
 
-make_coordinate_grid_cpu = lambda spatial_size, ttype: np.stack(
-    np.meshgrid(np.linspace(-1, 1, spatial_size[1]), np.linspace(-1, 1, spatial_size[0])), axis=-1).astype(np.float32)
-make_coordinate_grid = lambda spatial_size, ttype: dygraph.to_variable(
-    make_coordinate_grid_cpu(spatial_size, np.float32)).astype(ttype)
+def make_coordinate_grid(spatial_size, type='float32'):
+    """
+    Create a meshgrid [-1,1] x [-1,1] of given spatial_size.
+    """
+    h, w = spatial_size
+    x = paddle.arange(w, dtype='float32')
+    y = paddle.arange(h, dtype='float32')
 
+    x = (2 * (x / (w - 1)) - 1)
+    y = (2 * (y / (h - 1)) - 1)
 
-######################################################################
-# def make_coordinate_grid(spatial_size, type):
-#     """
-#     Create a meshgrid [-1,1] x [-1,1] of given spatial_size.
-#     """
-#     h, w = spatial_size
-#     x = torch.arange(w).type(type)
-#     y = torch.arange(h).type(type)
-#
-#     x = (2 * (x / (w - 1)) - 1)
-#     y = (2 * (y / (h - 1)) - 1)
-#
-#     yy = y.view(-1, 1).repeat(1, w)
-#     xx = x.view(1, -1).repeat(h, 1)
-#
-#     meshed = torch.cat([xx.unsqueeze_(2), yy.unsqueeze_(2)], 2)
-######################################################################
+    yy = y.reshape((-1, 1)).tile((1, w))
+    xx = x.reshape((1, -1)).tile((h, 1))
+
+    meshed = paddle.concat([xx.unsqueeze(2), yy.unsqueeze(2)], 2)
+    return meshed
+
 
 class ResBlock2d(paddle.nn.Layer):
     """
@@ -231,24 +217,17 @@ class AntiAliasInterpolation2d(paddle.nn.Layer):
         # The gaussian kernel is the product of the
         # gaussian function of each dimension.
         kernel = 1
-        # TODO: kernel DO NOT NEED BP, initialized in cpu by numpy
-        meshgrids = np.meshgrid(
-            *[
-                np.arange(size, dtype=np.float32)
-                for size in kernel_size
-            ]
-        )
-        meshgrids = [i.T for i in meshgrids]
+        meshgrids = paddle.meshgrid([paddle.arange(size, dtype='float32') for size in kernel_size])
         for size, std, mgrid in zip(kernel_size, sigma, meshgrids):
             mean = (size - 1) / 2
-            kernel *= np.exp(-(mgrid - mean) ** 2 / (2 * std ** 2))
+            kernel *= paddle.exp(-(mgrid - mean) ** 2 / (2 * std ** 2))
 
         # Make sure sum of values in gaussian kernel equals 1.
-        kernel = kernel / np.sum(kernel)
+        kernel = kernel / paddle.sum(kernel)
         # Reshape to depthwise convolutional weight
-        kernel = kernel.reshape(1, 1, *kernel.shape)
-        kernel = kernel.repeat(channels, 0)  # [1, 1, *kernel.shape] -> [channels, 1, *kernel.shape]
-        self.kernel_attr = fluid.ParamAttr(initializer=fluid.initializer.NumpyArrayInitializer(kernel), trainable=False)
+        kernel = kernel.reshape((1, 1, *kernel.shape))
+        kernel = kernel.tile((channels, *((1,)*(len(kernel.shape)-1))))  # [1, 1, *kernel.shape] -> [channels, 1, *kernel.shape]
+        self.kernel_attr = fluid.ParamAttr(initializer=paddle.nn.initializer.Assign(kernel), trainable=False)
         self.groups = channels
         self.scale = scale
         self.conv = dygraph.Conv2D(channels, channels, filter_size=kernel.shape[-1], groups=self.groups,

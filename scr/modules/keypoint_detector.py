@@ -3,7 +3,7 @@ import paddle
 from paddle import fluid
 from paddle.fluid import dygraph
 
-from modules.util import Hourglass, AntiAliasInterpolation2d, make_coordinate_grid_cpu
+from modules.util import Hourglass, AntiAliasInterpolation2d, make_coordinate_grid
 
 
 class KPDetector(paddle.nn.Layer):
@@ -43,8 +43,7 @@ class KPDetector(paddle.nn.Layer):
         """
         shape = heatmap.shape
         heatmap = fluid.layers.unsqueeze(heatmap, [-1])
-        grid = make_coordinate_grid_cpu(shape[2:], np.float32)[np.newaxis, np.newaxis, ...]
-        grid = dygraph.to_variable(grid)
+        grid = make_coordinate_grid(shape[2:]).unsqueeze([0, 1])
         value = fluid.layers.reduce_sum(heatmap * grid, [2, 3])
         kp = {'value': value}
         return kp
