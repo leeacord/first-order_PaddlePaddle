@@ -234,9 +234,9 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             paddle.fluid.save_dygraph(optimizer_discriminator.state_dict(), os.path.join(save_dir, 'epoch%i/D' % epoch))
             paddle.fluid.save_dygraph(optimizer_kp_detector.state_dict(), os.path.join(save_dir, 'epoch%i/KP' % epoch))
             logging.info('Model is saved to:%s' % os.path.join(save_dir, 'epoch%i/' % epoch))
-        gen_lr.epoch()
-        dis_lr.epoch()
-        kp_lr.epoch()
+        gen_lr.step()
+        dis_lr.step()
+        kp_lr.step()
 
 if __name__ == "__main__":
     paddle.set_device("gpu")
