@@ -220,7 +220,7 @@ class AntiAliasInterpolation2d(paddle.nn.Layer):
         meshgrids = paddle.meshgrid([paddle.arange(size, dtype='float32') for size in kernel_size])
         for size, std, mgrid in zip(kernel_size, sigma, meshgrids):
             mean = (size - 1) / 2
-            kernel *= paddle.exp(-(mgrid - mean) ** 2 / (2 * std ** 2))
+            kernel *= paddle.exp(-(mgrid - mean) ** 2 / (2 * std ** 2 + 1e-9))
 
         # Make sure sum of values in gaussian kernel equals 1.
         kernel = kernel / paddle.sum(kernel)
