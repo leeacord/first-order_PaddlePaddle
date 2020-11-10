@@ -1,25 +1,25 @@
 import paddle
-from paddle import fluid
-from paddle.fluid import dygraph
+import paddle.nn as nn
+import paddle.nn.functional as F
 
 from modules.util import kp2gaussian
 
 
-class DownBlock2d(paddle.nn.Layer):
+class DownBlock2d(nn.Layer):
     """
     Simple block for processing video (encoder).
     """
 
     def __init__(self, in_features, out_features, norm=False, kernel_size=4, pool=False, sn=False):
         super(DownBlock2d, self).__init__()
-        self.conv = dygraph.Conv2D(in_features, out_features, filter_size=kernel_size)
+        self.conv = nn.Conv2D(in_features, out_features, kernel_size=kernel_size)
 
         if sn:
-            self.sn = dygraph.SpectralNorm(self.conv.weight.shape, dim=0)
+            self.sn = nn.SpectralNorm(self.conv.weight.shape, dim=0)
         else:
             self.sn = None
         if norm:
-            self.norm = dygraph.InstanceNorm(num_channels=out_features, epsilon=1e-05, dtype='float32')
+            self.norm = nn.InstanceNorm2D(num_features=out_features, epsilon=1e-05)
         else:
             self.norm = None
 
@@ -32,13 +32,13 @@ class DownBlock2d(paddle.nn.Layer):
         out = self.conv(out)
         if self.norm is not None:
             out = self.norm(out)
-        out = fluid.layers.leaky_relu(out, 0.2)
+        out = F.leaky_relu(out, 0.2)
         if self.pool:
-            out = fluid.layers.pool2d(out, pool_size=2, pool_type='avg', pool_stride=2, ceil_mode=False)
+            out = F.avg_pool2d(out, kernel_size=2, stride=2, ceil_mode=False)
         return out
 
 
-class Discriminator(paddle.nn.Layer):
+class Discriminator(nn.Layer):
     """
     Discriminator similar to Pix2Pix
     """
@@ -54,10 +54,10 @@ class Discriminator(paddle.nn.Layer):
                             min(max_features, block_expansion * (2 ** (i + 1))),
                             norm=(i != 0), kernel_size=4, pool=(i != num_blocks - 1), sn=sn))
 
-        self.down_blocks = paddle.nn.LayerList(down_blocks)
-        self.conv = dygraph.Conv2D(self.down_blocks[len(self.down_blocks) - 1].conv.parameters()[0].shape[0], 1, filter_size=1)
+        self.down_blocks = nn.LayerList(down_blocks)
+        self.conv = nn.Conv2D(self.down_blocks[len(self.down_blocks) - 1].conv.parameters()[0].shape[0], 1, kernel_size=1)
         if sn:
-            self.sn = dygraph.SpectralNorm(self.conv.parameters()[0].shape, dim=0)
+            self.sn = nn.SpectralNorm(self.conv.parameters()[0].shape, dim=0)
         else:
             self.sn = None
         self.use_kp = use_kp
@@ -68,7 +68,7 @@ class Discriminator(paddle.nn.Layer):
         out = x
         if self.use_kp:
             heatmap = kp2gaussian(kp, x.shape[2:], self.kp_variance)
-            out = fluid.layers.concat([out, heatmap], axis=1)
+            out = paddle.concat([out, heatmap], axis=1)
         for down_block in self.down_blocks:
             feature_maps.append(down_block(out))
             out = feature_maps[-1]
@@ -78,7 +78,7 @@ class Discriminator(paddle.nn.Layer):
         return feature_maps, prediction_map
 
 
-class MultiScaleDiscriminator(paddle.nn.Layer):
+class MultiScaleDiscriminator(nn.Layer):
     """
     Multi-scale (scale) discriminator
     """
@@ -86,7 +86,7 @@ class MultiScaleDiscriminator(paddle.nn.Layer):
     def __init__(self, scales=(), **kwargs):
         super(MultiScaleDiscriminator, self).__init__()
         self.scales = scales
-        self.discs = paddle.nn.LayerList()
+        self.discs = nn.LayerList()
         self.nameList = []
         for scale in scales:
             self.discs.add_sublayer(str(scale).replace('.', '-'), Discriminator(**kwargs))

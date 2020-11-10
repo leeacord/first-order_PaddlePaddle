@@ -1,25 +1,22 @@
+import logging
 import os
 import sys
-import yaml
-import random
-import logging
 from argparse import ArgumentParser
 
-import paddle
-from paddle import fluid
-import paddle.fluid.dygraph as dygraph
-from tqdm import trange
 import numpy as np
-
+import paddle
+import yaml
 from frames_dataset import FramesDataset, DatasetRepeater
-from modules.generator import OcclusionAwareGenerator
 from modules.discriminator import MultiScaleDiscriminator
+from modules.generator import OcclusionAwareGenerator
 from modules.keypoint_detector import KPDetector
+from modules.model import GeneratorFullModel, DiscriminatorFullModel
+from paddle import fluid
+from paddle.optimizer.lr import MultiStepDecay
+from tqdm import trange
+
 # from reconstruction import reconstruction
 # from animate import animate
-
-from paddle.optimizer.lr import MultiStepDecay
-from modules.model import GeneratorFullModel, DiscriminatorFullModel
 
 TEST_MODE = False
 if TEST_MODE:
@@ -41,16 +38,16 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     # optimer
     if TEST_MODE:
         logging.warning('TEST MODE: Optimer is SGD, lr is 0.001. train.py: L50')
-        optimizer_generator = fluid.optimizer.SGDOptimizer(
-            parameter_list=generator.parameters(),
+        optimizer_generator = paddle.optimizer.SGD(
+            parameters=generator.parameters(),
             learning_rate=0.001
         )
-        optimizer_discriminator = fluid.optimizer.SGDOptimizer(
-            parameter_list=discriminator.parameters(),
+        optimizer_discriminator = paddle.optimizer.SGD(
+            parameters=discriminator.parameters(),
             learning_rate=0.001
         )
-        optimizer_kp_detector = fluid.optimizer.SGDOptimizer(
-            parameter_list=kp_detector.parameters(),
+        optimizer_kp_detector = paddle.optimizer.SGD(
+            parameters=kp_detector.parameters(),
             learning_rate=0.001
         )
     else:
@@ -89,7 +86,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             if diff_num == 0:
                 # rename key
                 assign_dict = dict([(i[0], j[1]) for i, j in zip(generator.state_dict().items(), G_param_clean.items())])
-                generator.set_state_dict(assign_dict)
+                generator.set_state_dict(assign_dict, use_structured_name=False)
                 logging.info('Generator is loaded from *.npz')
             else:
                 logging.warning('Generator cannot load from *.npz')
@@ -97,7 +94,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             param, optim = fluid.load_dygraph(ckpt_config['generator'])
             generator.set_dict(param)
             if optim is not None:
-                optimizer_generator.set_dict(optim)
+                optimizer_generator.set_state_dict(optim)
             else:
                 logging.info('Optimizer of G is not loaded')
             logging.info('Generator is loaded from *.pdparams')
@@ -113,7 +110,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             param, optim = fluid.load_dygraph(ckpt_config['kp'])
             kp_detector.set_dict(param)
             if optim is not None:
-                optimizer_kp_detector.set_dict(optim)
+                optimizer_kp_detector.set_state_dict(optim)
             else:
                 logging.info('Optimizer of KP is not loaded')
             logging.info('KP is loaded from *.pdparams')
@@ -157,7 +154,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             param, optim = fluid.load_dygraph(ckpt_config['discriminator'])
             discriminator.set_dict(param)
             if optim is not None:
-                optimizer_discriminator.set_dict(optim)
+                optimizer_discriminator.set_state_dict(optim)
             else:
                 logging.info('Optimizer of Discriminator is not loaded')
             logging.info('Discriminator is loaded from *.pdparams')
@@ -179,7 +176,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     discriminator_full.train()
     for epoch in trange(start_epoch, train_params['num_epochs']):
         for _step, _x in enumerate(dataloader()):
-            # prepear data
+            # prepare data
             x = dict()
             x['driving'], x['source'] = _x
             x['name'] = ['NULL'] * _x[0].shape[0]
@@ -190,8 +187,8 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                 x['name'] = ['test1', 'test2']
             # train generator
             losses_generator, generated = generator_full(x.copy())
-            loss_values = [fluid.layers.reduce_sum(val) for val in losses_generator.values()]
-            loss = fluid.layers.sum(loss_values)
+            loss_values = [val.sum() for val in losses_generator.values()]
+            loss = paddle.add_n(loss_values)
             if TEST_MODE:
                 print('Check Generator Loss')
                 print('\n'.join(['%s:%1.5f'%(k,v.numpy()) for k,v in zip(losses_generator.keys(), loss_values)]))
@@ -206,8 +203,8 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             if train_params['loss_weights']['generator_gan'] != 0:
                 optimizer_discriminator.clear_gradients()
                 losses_discriminator = discriminator_full(x.copy(), generated)
-                loss_values = [fluid.layers.reduce_mean(val) for val in losses_discriminator.values()]
-                loss = fluid.layers.sum(loss_values)
+                loss_values = [val.mean() for val in losses_discriminator.values()]
+                loss = paddle.add_n(loss_values)
                 if TEST_MODE:
                     print('Check Discriminator Loss')
                     print('\n'.join(['%s:%1.5f'%(k,v.numpy()) for k,v in zip(losses_discriminator.keys(), loss_values)]))
@@ -219,7 +216,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                 losses_discriminator = {}
             
             losses_generator.update(losses_discriminator)
-            losses = {key: fluid.layers.reduce_mean(value).detach().numpy() for key, value in losses_generator.items()}
+            losses = {key: value.mean().detach().numpy() for key, value in losses_generator.items()}
             
             # print log
             if _step % 20 == 0:
@@ -238,6 +235,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
         gen_lr.step()
         dis_lr.step()
         kp_lr.step()
+
 
 if __name__ == "__main__":
     paddle.set_device("gpu")

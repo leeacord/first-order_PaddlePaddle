@@ -1,13 +1,11 @@
+import logging
+
+import numpy as np
+import paddle
+import paddle.nn as nn
+import paddle.nn.functional as F
 from modules.util import AntiAliasInterpolation2d, make_coordinate_grid
 
-import paddle
-import logging
-import numpy as np
-import paddle.nn.functional as F
-from paddle import fluid
-from paddle.fluid import dygraph
-
-logging.warning('Need second order derivative model.py:L170-258')
 TEST_MODE = False
 if TEST_MODE:
     logging.warning('TEST MODE: model.py')
@@ -18,37 +16,36 @@ class conv_block(paddle.nn.Layer):
         super(conv_block, self).__init__()
         self._layers = []
         i = 0
-        self.conv_in = dygraph.Conv2D(
-            num_channels=input_channels,
-            num_filters=num_filter,
+        # 'act' is not a parameter of nn.Conv2D
+        self.conv_in = paddle.fluid.dygraph.Conv2D(
+            input_channels,
+            num_filter,
             filter_size=3,
             stride=1,
             padding=1,
             act='relu',
-            param_attr=fluid.param_attr.ParamAttr(
-                name=name + str(i + 1) + "_weights"),
-            bias_attr=False if not use_bias else fluid.param_attr.ParamAttr(
-                name=name + str(i + 1) + "_bias"))
+            param_attr=paddle.ParamAttr(name=name + str(i + 1) + "_weights"),
+            bias_attr=False if not use_bias else paddle.ParamAttr(name=name + str(i + 1) + "_bias")
+        )
         if groups == 1:
             return
         for i in range(1, groups):
-            _a = dygraph.Conv2D(
-                num_channels=num_filter,
-                num_filters=num_filter,
+            _a = paddle.fluid.dygraph.Conv2D(
+                num_filter,
+                num_filter,
                 filter_size=3,
                 stride=1,
                 padding=1,
                 act='relu',
-                param_attr=fluid.param_attr.ParamAttr(
-                    name=name + str(i + 1) + "_weights"),
-                bias_attr=False if not use_bias else fluid.param_attr.ParamAttr(
-                    name=name + str(i + 1) + "_bias"))
+                param_attr=paddle.ParamAttr(name=name + str(i + 1) + "_weights"),
+                bias_attr=False if not use_bias else paddle.ParamAttr(name=name + str(i + 1) + "_bias")
+            )
             self._layers.append(_a)
-        self.conv = dygraph.Sequential(*self._layers)
+        self.conv = nn.Sequential(*self._layers)
     
     def forward(self, x):
         feat = self.conv_in(x)
-        out = fluid.layers.pool2d(input=self.conv(feat), pool_size=2, pool_type='max', pool_stride=2)
+        out = F.max_pool2d(self.conv(feat), kernel_size=2, stride=2)
         return out, feat
 
 
@@ -118,12 +115,12 @@ class Transform:
     
     def __init__(self, bs, **kwargs):
         # noise = np.random.normal(loc=0, scale=kwargs['sigma_affine'], size=(bs, 2, 3))
-        noise = fluid.layers.Normal(loc=[0], scale=[kwargs['sigma_affine']]).sample([bs, 2, 3])
-        noise = fluid.layers.reshape(noise, (bs, 2, 3))
+        noise = paddle.distribution.Normal(loc=[0], scale=[kwargs['sigma_affine']]).sample([bs, 2, 3])
+        noise = noise.reshape((bs, 2, 3))
         if TEST_MODE:
             noise = paddle.to_tensor(np.ones((bs, 2, 3)).astype(np.float32))
         
-        self.theta = noise + fluid.layers.reshape(fluid.layers.eye(2, 3), (1, 2, 3))
+        self.theta = noise + paddle.tensor.eye(2, 3, dtype='float32').reshape((1, 2, 3))
         self.bs = bs
         
         if ('sigma_tps' in kwargs) and ('points_tps' in kwargs):
@@ -132,18 +129,16 @@ class Transform:
             if TEST_MODE:
                 self.control_params = paddle.to_tensor(np.ones((bs, 1, kwargs['points_tps'] ** 2)).astype(np.float32))
             else:
-                buf = fluid.layers.Normal(loc=[0], scale=[kwargs['sigma_tps']]).sample(
+                buf = paddle.distribution.Normal(loc=[0], scale=[kwargs['sigma_tps']]).sample(
                     [bs, 1, kwargs['points_tps'] ** 2])
-                self.control_params = fluid.layers.reshape(buf, (bs, 1, kwargs['points_tps'] ** 2))
-                # self.control_params = dygraph.to_variable(
-                #     np.random.normal(loc=0, scale=kwargs['sigma_tps'], size=(bs, 1, kwargs['points_tps'] ** 2)))
+                self.control_params = buf.reshape((bs, 1, kwargs['points_tps'] ** 2))
         else:
             self.tps = False
     
     def transform_frame(self, frame):
-        grid = fluid.layers.unsqueeze(make_coordinate_grid(frame.shape[2:], 'float32'), [0])
-        grid = fluid.layers.reshape(grid, (1, frame.shape[2] * frame.shape[3], 2))
-        grid = fluid.layers.reshape(self.warp_coordinates(grid), (self.bs, frame.shape[2], frame.shape[3], 2))
+        grid = make_coordinate_grid(frame.shape[2:], 'float32').unsqueeze(0)
+        grid = grid.reshape((1, frame.shape[2] * frame.shape[3], 2))
+        grid = self.warp_coordinates(grid).reshape((self.bs, frame.shape[2], frame.shape[3], 2))
         if TEST_MODE:
             return F.grid_sample(frame, grid, mode='bilinear', padding_mode='reflection', align_corners=True)
         else:
@@ -151,27 +146,26 @@ class Transform:
     
     def warp_coordinates(self, coordinates):
         theta = self.theta.astype('float32')
-        theta = fluid.layers.unsqueeze(theta, 1)
-        coordinates = fluid.layers.unsqueeze(coordinates, -1)
+        theta = theta.unsqueeze(1)
+        coordinates = coordinates.unsqueeze(-1)
         # If x1:(1, 5, 2, 2), x2:(10, 100, 2, 1)
         # torch.matmul can broadcast x1, x2 to (10, 100, ...)
         # In PDPD, it should be done manually
         theta_part_a = theta[:, :, :, :2]
         theta_part_b = theta[:, :, :, 2:]
-        # Use broadcast_v1 instead
-        transformed = fluid.layers.matmul(*broadcast_v1(theta_part_a, coordinates)) + theta_part_b
-        transformed = fluid.layers.squeeze(transformed, [-1])
+        # TODO: paddle.matmul have no double_grad_op
+        transformed = paddle.fluid.layers.matmul(*broadcast_v1(theta_part_a, coordinates)) + theta_part_b
+        transformed = transformed.squeeze(-1)
         if self.tps:
             control_points = self.control_points.astype('float32')
             control_params = self.control_params.astype('float32')
-            distances = fluid.layers.reshape(coordinates, (coordinates.shape[0], -1, 1, 2)) - fluid.layers.reshape(
-                control_points, (1, 1, -1, 2))
-            distances = fluid.layers.reduce_sum(fluid.layers.abs(distances), -1)
+            distances = coordinates.reshape((coordinates.shape[0], -1, 1, 2)) - control_points.reshape((1, 1, -1, 2))
+            distances = distances.abs().sum(-1)
     
             result = distances * distances
-            result = result * fluid.layers.log(distances + 1e-6)
+            result = result * paddle.log(distances + 1e-6)
             result = result * control_params
-            result = fluid.layers.reshape(fluid.layers.reduce_sum(result, 2), (self.bs, coordinates.shape[1], 1))
+            result = result.sum(2).reshape((self.bs, coordinates.shape[1], 1))
             transformed = transformed + result
         return transformed
     
@@ -179,10 +173,9 @@ class Transform:
         new_coordinates = self.warp_coordinates(coordinates)  # When batch_size is 5, the shape of coordinates and new_coordinates is (5, 10, 2)
         # PDPD cannot use new_coordinates[..., 0]
         assert len(new_coordinates.shape) == 3
-        grad_x = dygraph.grad(fluid.layers.reduce_sum(new_coordinates[:, :, 0]), coordinates, create_graph=True)
-        grad_y = dygraph.grad(fluid.layers.reduce_sum(new_coordinates[:, :, 1]), coordinates, create_graph=True)
-        jacobian = fluid.layers.concat([fluid.layers.unsqueeze(grad_x[0], -2), fluid.layers.unsqueeze(grad_y[0], -2)],
-                                       axis=-2)
+        grad_x = paddle.grad(new_coordinates[:, :, 0].sum(), coordinates, create_graph=True)
+        grad_y = paddle.grad(new_coordinates[:, :, 1].sum(), coordinates, create_graph=True)
+        jacobian = paddle.concat([grad_x[0].unsqueeze(-2), grad_y[0].unsqueeze(-2)], axis=-2)
         return jacobian
 
 
@@ -228,7 +221,7 @@ class GeneratorFullModel(paddle.nn.Layer):
                 x_vgg = self.vgg(pyramide_generated['prediction_' + str(scale)])
                 y_vgg = self.vgg(pyramide_real['prediction_' + str(scale)])
                 for i, weight in enumerate(self.loss_weights['perceptual']):
-                    value = fluid.layers.reduce_mean(fluid.layers.abs(x_vgg[i] - y_vgg[i].detach()))
+                    value = paddle.abs(x_vgg[i] - y_vgg[i].detach()).mean()
                     value_total += self.loss_weights['perceptual'][i] * value
             loss_values['perceptual'] = value_total
         
@@ -239,7 +232,7 @@ class GeneratorFullModel(paddle.nn.Layer):
             value_total = 0
             for scale in self.disc_scales:
                 key = 'prediction_map_%s' % scale
-                value = fluid.layers.reduce_mean((1 - discriminator_maps_generated[key]) ** 2)
+                value = ((1 - discriminator_maps_generated[key]) ** 2).mean()
                 value_total += self.loss_weights['generator_gan'] * value
             loss_values['gen_gan'] = value_total
             
@@ -251,7 +244,7 @@ class GeneratorFullModel(paddle.nn.Layer):
                     for i, (a, b) in enumerate(zip(discriminator_maps_real[key], discriminator_maps_generated[key])):
                         if self.loss_weights['feature_matching'][i] == 0:
                             continue
-                        value = fluid.layers.reduce_mean(fluid.layers.abs(a - b))
+                        value = paddle.abs(a - b).mean()
                         value_total += self.loss_weights['feature_matching'][i] * value
                 loss_values['feature_matching'] = value_total
         if (self.loss_weights['equivariance_value'] + self.loss_weights['equivariance_jacobian']) != 0:
@@ -264,19 +257,18 @@ class GeneratorFullModel(paddle.nn.Layer):
             
             ## Value loss part
             if self.loss_weights['equivariance_value'] != 0:
-                value = fluid.layers.reduce_mean(
-                    fluid.layers.abs(kp_driving['value'] - transform.warp_coordinates(transformed_kp['value'])))
+                value = paddle.abs(kp_driving['value'] - transform.warp_coordinates(transformed_kp['value'])).mean()
                 loss_values['equivariance_value'] = self.loss_weights['equivariance_value'] * value
             ## jacobian loss part
             if self.loss_weights['equivariance_jacobian'] != 0:
-                jacobian_transformed = fluid.layers.matmul(
+                jacobian_transformed = paddle.matmul(
                     *broadcast_v1(transform.jacobian(transformed_kp['value']), transformed_kp['jacobian']))
                 normed_driving = paddle.inverse(kp_driving['jacobian'])
                 normed_transformed = jacobian_transformed
-                value = fluid.layers.matmul(*broadcast_v1(normed_driving, normed_transformed))
-                eye = dygraph.to_variable(fluid.layers.reshape(fluid.layers.eye(2, 2, dtype='float32'), (1, 1, 2, 2)))
+                value = paddle.matmul(*broadcast_v1(normed_driving, normed_transformed))
+                eye = paddle.tensor.eye(2, dtype='float32').reshape((1, 1, 2, 2))
                 
-                value = fluid.layers.reduce_mean(fluid.layers.abs(eye - value))
+                value = paddle.abs(eye - value).mean()
                 loss_values['equivariance_jacobian'] = self.loss_weights['equivariance_jacobian'] * value
         return loss_values, generated
 
@@ -309,7 +301,7 @@ class DiscriminatorFullModel(paddle.nn.Layer):
         for scale in self.scales:
             key = 'prediction_map_%s' % scale
             value = (1 - discriminator_maps_real[key]) ** 2 + discriminator_maps_generated[key] ** 2
-            value_total += self.loss_weights['discriminator_gan'] * fluid.layers.reduce_mean(value)
+            value_total += self.loss_weights['discriminator_gan'] * value.mean()
         loss_values['disc_gan'] = value_total
         
         return loss_values
@@ -325,8 +317,6 @@ def broadcast_v1(x, y):
     *dim_x, _, _ = x.shape
     *dim_y, _, _ = y.shape
     max_shape = np.max(np.stack([dim_x, dim_y], axis=0), axis=0)
-    if np.count_nonzero(max_shape % np.array(dim_x)) != 0 or np.count_nonzero(max_shape % np.array(dim_y)) != 0:
-        raise ValueError()
-    x_bc = fluid.layers.expand(x, (*((max_shape / np.array(dim_x)).astype(np.int32).tolist()), 1, 1)).astype('float32')
-    y_bc = fluid.layers.expand(y, (*((max_shape / np.array(dim_y)).astype(np.int32).tolist()), 1, 1)).astype('float32')
+    x_bc = paddle.broadcast_to(x, (*max_shape, x.shape[-2], x.shape[-1]))
+    y_bc = paddle.broadcast_to(y, (*max_shape, y.shape[-2], y.shape[-1]))
     return x_bc, y_bc

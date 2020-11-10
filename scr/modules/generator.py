@@ -1,20 +1,15 @@
 import logging
 
 import paddle
-
-from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d
+import paddle.nn as nn
+import paddle.nn.functional as F
 from modules.dense_motion import DenseMotionNetwork
-from paddle import fluid
-from paddle.fluid import dygraph
-from paddle.nn import functional as F
+from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d
 
 TEST_MODE = False
 if TEST_MODE:
     logging.warning('TEST MODE: Output of fluid.layers.grid_sampler is 2. generator:L83')
 
-
-# TODO: test OcclusionAwareGenerator
-# Programing......None
 
 class OcclusionAwareGenerator(paddle.nn.Layer):
     """
@@ -41,21 +36,21 @@ class OcclusionAwareGenerator(paddle.nn.Layer):
             in_features = min(max_features, block_expansion * (2 ** i))
             out_features = min(max_features, block_expansion * (2 ** (i + 1)))
             down_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
-        self.down_blocks = dygraph.LayerList(down_blocks)
+        self.down_blocks = nn.LayerList(down_blocks)
         
         up_blocks = []
         for i in range(num_down_blocks):
             in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
             out_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i - 1)))
             up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
-        self.up_blocks = dygraph.LayerList(up_blocks)
+        self.up_blocks = nn.LayerList(up_blocks)
         
-        self.bottleneck = dygraph.Sequential()
+        self.bottleneck = nn.Sequential()
         in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
         for i in range(num_bottleneck_blocks):
             self.bottleneck.add_sublayer('r' + str(i), ResBlock2d(in_features, kernel_size=(3, 3), padding=(1, 1)))
         
-        self.final = dygraph.Conv2D(block_expansion, num_channels, filter_size=(7, 7), padding=(3, 3))
+        self.final = nn.Conv2D(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
         self.estimate_occlusion_map = estimate_occlusion_map
         self.num_channels = num_channels
     
@@ -63,9 +58,9 @@ class OcclusionAwareGenerator(paddle.nn.Layer):
         _, h_old, w_old, _ = deformation.shape
         _, _, h, w = inp.shape
         if h_old != h or w_old != w:
-            deformation = fluid.layers.transpose(deformation, (0, 3, 1, 2))
+            deformation = paddle.transpose(deformation, (0, 3, 1, 2))
             deformation = F.interpolate(deformation, size=(h, w), mode='BILINEAR', align_corners=False)
-            deformation = fluid.layers.transpose(deformation, (0, 2, 3, 1))
+            deformation = paddle.transpose(deformation, (0, 2, 3, 1))
         if TEST_MODE:
             bf = F.grid_sample(inp, deformation, mode='bilinear', padding_mode='zeros',
                                              align_corners=True)
@@ -106,6 +101,6 @@ class OcclusionAwareGenerator(paddle.nn.Layer):
         for i in range(len(self.up_blocks)):
             out = self.up_blocks[i](out)
         out = self.final(out)
-        out = fluid.layers.sigmoid(out)
+        out = F.sigmoid(out)
         output_dict["prediction"] = out
         return output_dict

@@ -1,8 +1,7 @@
-import paddle
 import numpy as np
-from paddle import fluid
-from paddle.fluid import dygraph
-from paddle.nn import functional as F
+import paddle
+import paddle.nn as nn
+import paddle.nn.functional as F
 
 
 def kp2gaussian(kp, spatial_size, kp_variance: np.ndarray) -> np.ndarray:
@@ -20,16 +19,11 @@ def kp2gaussian(kp, spatial_size, kp_variance: np.ndarray) -> np.ndarray:
 
     # Preprocess kp shape
     shape = tuple(mean.shape)[:number_of_leading_dimensions] + (1, 1, 2)
-    mean = fluid.layers.reshape(kp['value'], shape)
+    mean = kp['value'].reshape(shape)
 
     mean_sub = (coordinate_grid - mean)
-    if isinstance(kp_variance, fluid.core_avx.VarBase):
-        pass
-    elif isinstance(kp_variance, (np.ndarray, float)):
-        kp_variance = dygraph.to_variable(np.array([kp_variance]).astype(np.float32))
-    else:
-        raise TypeError('TYPE of keypoint : %s is not supported' % type(kp_variance))
-    out = fluid.layers.exp(-0.5 * fluid.layers.reduce_sum((mean_sub ** 2), -1) / kp_variance)
+    kp_variance = paddle.to_tensor(np.array([kp_variance]).astype(np.float32))
+    out = paddle.exp(-0.5 * (mean_sub ** 2).sum(-1) / kp_variance)
     return out
 
 
@@ -58,17 +52,17 @@ class ResBlock2d(paddle.nn.Layer):
 
     def __init__(self, in_features, kernel_size, padding, **kwargs):
         super(ResBlock2d, self).__init__(**kwargs)
-        self.conv1 = dygraph.Conv2D(num_channels=in_features, num_filters=in_features, filter_size=kernel_size, padding=padding)
-        self.conv2 = dygraph.Conv2D(num_channels=in_features, num_filters=in_features, filter_size=kernel_size, padding=padding)
-        self.norm1 = dygraph.BatchNorm(num_channels=in_features, momentum=0.1)
-        self.norm2 = dygraph.BatchNorm(num_channels=in_features, momentum=0.1)
+        self.conv1 = nn.Conv2D(in_features, in_features, kernel_size=kernel_size, padding=padding)
+        self.conv2 = nn.Conv2D(in_features, in_features, kernel_size=kernel_size, padding=padding)
+        self.norm1 = nn.BatchNorm(num_channels=in_features)
+        self.norm2 = nn.BatchNorm(num_channels=in_features)
 
     def forward(self, x):
         out = self.norm1(x)
-        out = fluid.layers.relu(out)
+        out = F.relu(out)
         out = self.conv1(out)
         out = self.norm2(out)
-        out = fluid.layers.relu(out)
+        out = F.relu(out)
         out = self.conv2(out)
         out += x
         return out
@@ -81,19 +75,19 @@ class UpBlock2d(paddle.nn.Layer):
 
     def __init__(self, in_features, out_features, kernel_size=3, padding=1, groups=1):
         super(UpBlock2d, self).__init__()
-        self.conv = dygraph.Conv2D(
-            num_channels=in_features,
-            num_filters=out_features,
-            filter_size=kernel_size,
+        self.conv = nn.Conv2D(
+            in_features,
+            out_features,
+            kernel_size=kernel_size,
             padding=padding,
             groups=groups)
-        self.norm = dygraph.BatchNorm(num_channels=out_features, momentum=0.1)
+        self.norm = nn.BatchNorm(num_channels=out_features)
 
     def forward(self, x):
         out = F.interpolate(x, scale_factor=2, mode='NEAREST', align_corners=False)
         out = self.conv(out)
         out = self.norm(out)
-        out = fluid.layers.relu(out)
+        out = F.relu(out)
         return out
 
 
@@ -104,14 +98,14 @@ class DownBlock2d(paddle.nn.Layer):
 
     def __init__(self, in_features, out_features, kernel_size=3, padding=1, groups=1):
         super(DownBlock2d, self).__init__()
-        self.conv = dygraph.Conv2D(num_channels=in_features, num_filters=out_features, filter_size=kernel_size, padding=padding, groups=groups)
-        self.norm = dygraph.BatchNorm(num_channels=out_features, momentum=0.1)
-        self.pool = dygraph.Pool2D(pool_size=(2, 2), pool_type='avg', pool_stride=2)
+        self.conv = nn.Conv2D(in_features, out_features, kernel_size=kernel_size, padding=padding, groups=groups)
+        self.norm = nn.BatchNorm(num_channels=out_features)
+        self.pool = nn.AvgPool2D(kernel_size=(2, 2), stride=2)
 
     def forward(self, x):
         out = self.conv(x)
         out = self.norm(out)
-        out = fluid.layers.relu(out)
+        out = F.relu(out)
         out = self.pool(out)
         return out
 
@@ -123,14 +117,13 @@ class SameBlock2d(paddle.nn.Layer):
 
     def __init__(self, in_features, out_features, groups=1, kernel_size=3, padding=1):
         super(SameBlock2d, self).__init__()
-        self.conv = dygraph.Conv2D(
-            num_channels=in_features, num_filters=out_features, filter_size=kernel_size, padding=padding, groups=groups)
-        self.norm = dygraph.BatchNorm(out_features)
+        self.conv = nn.Conv2D(in_features, out_features, kernel_size=kernel_size, padding=padding, groups=groups)
+        self.norm = nn.BatchNorm(out_features)
 
     def forward(self, x):
         out = self.conv(x)
         out = self.norm(out)
-        out = fluid.layers.relu(out)
+        out = F.relu(out)
         return out
 
 
@@ -180,7 +173,7 @@ class Decoder(paddle.nn.Layer):
             out = up_block(out)
             skip = x.pop()
             # TODO: If the size of width or length is odd, out and skip cannot concat
-            out = fluid.layers.concat([out, skip], axis=1)
+            out = paddle.concat([out, skip], axis=1)
         return out
 
 
@@ -227,18 +220,20 @@ class AntiAliasInterpolation2d(paddle.nn.Layer):
         # Reshape to depthwise convolutional weight
         kernel = kernel.reshape((1, 1, *kernel.shape))
         kernel = kernel.tile((channels, *((1,)*(len(kernel.shape)-1))))  # [1, 1, *kernel.shape] -> [channels, 1, *kernel.shape]
-        self.kernel_attr = fluid.ParamAttr(initializer=paddle.nn.initializer.Assign(kernel), trainable=False)
+        self.kernel_attr = paddle.ParamAttr(initializer=paddle.nn.initializer.Assign(kernel), trainable=False)
         self.groups = channels
         self.scale = scale
-        self.conv = dygraph.Conv2D(channels, channels, filter_size=kernel.shape[-1], groups=self.groups,
-                                   param_attr=self.kernel_attr, bias_attr=False)
+        self.conv = nn.Conv2D(channels, channels, kernel_size=kernel.shape[-1], groups=self.groups,
+                              weight_attr=self.kernel_attr,
+                              bias_attr=False
+                              )
         self.conv.weight.set_value(kernel)
 
     def forward(self, input):
         if self.scale == 1.0:
             return input
         
-        out = fluid.layers.pad2d(input=input, paddings=[self.ka, self.kb, self.ka, self.kb], mode='constant')
+        out = F.pad(input, [self.ka, self.kb, self.ka, self.kb], mode='constant')
         out = self.conv(out)
         # TODO: fluid.layers.interpolate IS NOT SAME WITH F.interpolate due to align_corners==True, use fluid.layers.resize_nearest instead.
         out = F.interpolate(out, scale_factor=self.scale, mode='NEAREST', align_corners=False)
