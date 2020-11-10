@@ -32,11 +32,13 @@ def load_checkpoints(config_path):
     if pretrain_model['generator'] is not None:
         if pretrain_model['generator'][-3:] == 'npz':
             G_param = np.load(pretrain_model['generator'], allow_pickle=True)['arr_0'].item()
-            G_param_clean = [(i, G_param[i]) for i in G_param if 'num_batches_tracked' not in i]
-            parameter_clean = generator.parameters()
-            del(parameter_clean[65])  # The parameters in AntiAliasInterpolation2d is not in dict_set and should be ignore.
-            for p, v in zip(parameter_clean, G_param_clean):
-                p.set_value(v[1])
+            G_param_clean = dict([(i, G_param[i]) for i in G_param if 'num_batches_tracked' not in i])
+            diff_num = np.array([list(i.shape) != list(j.shape) for i, j in zip(generator.state_dict().values(), G_param_clean.values())]).sum()
+            if diff_num == 0:
+                # rename key
+                assign_dict = dict([(i[0], j[1]) for i, j in zip(generator.state_dict().items(), G_param_clean.items())])
+                # TODO: try generator.set_state_dict(G_param_clean, use_structured_name=False)
+                generator.set_state_dict(assign_dict, use_structured_name=False)
         else:
             a, b = fluid.load_dygraph(pretrain_model['generator'])
             generator.set_dict(a)

@@ -1,6 +1,6 @@
 # First Order Motion Model for Image Animation 动态图实现
-
----
+当前版本速度慢于[此版本](https://github.com/leeacord/first-order_PaddlePaddle/tree/274d618c00af57576a4647b4699ee4ab475847d5)
+19.5h > 17.5h
 ## 内容
 
 - [模型简介](#模型简介)
@@ -71,21 +71,15 @@ dataset
     └── train
 ```
 
-## :warning:模型训练:warning:
+## 	模型训练
 
-**当前模型尚未实现从头训练,且存在以下问题**
+:warning:**当前模型尚未实现从头训练**:warning:
 
-| 描述                                                         | 位置                                              | 当前方案                                                     |
-| ------------------------------------------------------------ | ------------------------------------------------- | ------------------------------------------------------------ |
-| `fluid.layers.grid_sampler`在`align_corners`上与torch可能不一致 | - generator.py<br>- dense_motion.py<br>- model.py | 采用fluid.layers.grid_sampler替代，同时TEST_MODE时设为指定输出 |
-| `fluid.layers.interpolate()`缺少align_corners选项            | - generator.py<br>- util.py                       | 采用resize_nearest代替                                       |
-| 缺少部分op的二次梯度，`grad()`中无法设置`create_graph=True`  | model.py: Transform.warp_coordinates              | 采用现有op建立一阶梯度计算图，并将一阶梯度作为参数传出，从而计算二阶梯度 |
-
-* 当前脚本中已预留测试模式，该模式下会固定输入数据、模型内随机数以及当前无法等效的op的输出，并会在warning中进行提示，如`fluid.layers.grid_sampler`。
+* 当前脚本中已预留测试模式，该模式下会固定输入数据和模型内随机数，并会在warning中进行提示。
 
 * 开启测试模式后，损失函数处会进入断点并打印各损失函数的值，便于原版模型进行对比。
 
-* 若要开启请令train.py/dense_motino.py/generator.py/model.py中开头部分的`TEST_MODE=True`
+* 若要开启请令train.py/model.py中开头部分的`TEST_MODE=True`
 
 数据准备完成后，通过如下方式启动训练：
 
@@ -103,7 +97,7 @@ train.py --config $PATH_TO_YAML_CONFIG [--save_dir $PATH_TO_SAVE] [--preload]
 
 ## 模型评估
 
-- 当前存在反向传播问题，故仅与原版的推理结果进行对比，对比结果存放在test_file各文件夹下的result文件中
+- 当前存在训练问题，故仅与原版的推理结果进行对比，对比结果存放在test_file各文件夹下的result文件中
 
 <p align="center">
 <img src="doc/mgif_result.gif"/> <br />
@@ -124,7 +118,7 @@ python demo.py --config $PATH_TO_YAML_CONFIG --source_image $PATH_TO_SOURCE_IMG 
 - 进行推理时模型会重新构建网络并载入预训练数据，请确保config的model_params部分与训练时一致，并在ckpt_model中指定各组件的模型路径。**一般只需指定generator和kp.**
 - 当前模型可导入pytorch的预训练模型，在fashion/mgif/vox三个数据集上测试通过，[[已转换的预训练模型路径]](https://aistudio.baidu.com/aistudio/datasetdetail/57313)。具体转换方式在底部给出。原文模型地址为[[GDrive]](https://drive.google.com/open?id=1PyQJmkdCsAkOYwUyaj_l-l0as-iLDgeH) [[Yandex]](https://yadi.sk/d/lEw8uRm140L_eQ)
 - 保存的文件格式会根据result_video的扩展名调整，若未指定result_video，上述程序会将运行结果保存在./result.mp4文件中。对于gif格式的引导视频，建议以gif格式输出。
-- :warning:当前使用cpu推断出现问题，请勿使用 使用CPU进行评估时，请加入 --cpu 参数。
+- 使用CPU进行评估时，请加入 --cpu 参数
 ```python
 # pytorch模型转换
 # mgif/vox/fashion模型已通过转换测试

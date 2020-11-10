@@ -215,7 +215,7 @@ class FramesDataset(Dataset):
     def getSample(self, idx):
         return self.__getitem__(idx)
 
-# TODO: DatasetRepeater
+
 class DatasetRepeater(Dataset):
     """
     Pass several times over the same dataset for better i/o performance
@@ -231,7 +231,7 @@ class DatasetRepeater(Dataset):
     def __getitem__(self, idx):
         return self.dataset[idx % self.dataset.__len__()]
 
-
+# TODO: PairedDataset
 # class PairedDataset(Dataset):
 #     """
 #     Dataset of pairs for animation.
