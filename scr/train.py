@@ -54,16 +54,16 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             learning_rate=0.001
         )
     else:
-        optimizer_generator = fluid.optimizer.AdamOptimizer(
-            parameter_list=generator.parameters(),
+        optimizer_generator = paddle.optimizer.Adam(
+            parameters=generator.parameters(),
             learning_rate=gen_lr
         )
-        optimizer_discriminator = fluid.optimizer.AdamOptimizer(
-            parameter_list=discriminator.parameters(),
+        optimizer_discriminator = paddle.optimizer.Adam(
+            parameters=discriminator.parameters(),
             learning_rate=dis_lr
         )
-        optimizer_kp_detector = fluid.optimizer.AdamOptimizer(
-            parameter_list=kp_detector.parameters(),
+        optimizer_kp_detector = paddle.optimizer.Adam(
+            parameters=kp_detector.parameters(),
             learning_rate=kp_lr
         )
     
@@ -182,10 +182,11 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             # prepear data
             x = dict()
             x['driving'], x['source'] = _x
+            x['name'] = ['NULL'] * _x[0].shape[0]
             if TEST_MODE:
                 logging.warning('TEST MODE: Input is Fixed train.py: L207')
-                x['driving'] = dygraph.to_variable(fake_input)
-                x['source'] = dygraph.to_variable(fake_input)
+                x['driving'] = paddle.to_tensor(fake_input)
+                x['source'] = paddle.to_tensor(fake_input)
                 x['name'] = ['test1', 'test2']
             # train generator
             losses_generator, generated = generator_full(x.copy())
@@ -196,10 +197,10 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                 print('\n'.join(['%s:%1.5f'%(k,v.numpy()) for k,v in zip(losses_generator.keys(), loss_values)]))
                 import pdb;pdb.set_trace();
             loss.backward()
-            optimizer_generator.minimize(loss)
-            optimizer_generator.clear_gradients()
-            optimizer_kp_detector.minimize(loss)
-            optimizer_kp_detector.clear_gradients()
+            optimizer_generator.step()
+            optimizer_generator.clear_grad()
+            optimizer_kp_detector.step()
+            optimizer_kp_detector.clear_grad()
             
             # train discriminator
             if train_params['loss_weights']['generator_gan'] != 0:
@@ -212,8 +213,8 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                     print('\n'.join(['%s:%1.5f'%(k,v.numpy()) for k,v in zip(losses_discriminator.keys(), loss_values)]))
                     import pdb;pdb.set_trace();
                 loss.backward()
-                optimizer_discriminator.minimize(loss)
-                optimizer_discriminator.clear_gradients()
+                optimizer_discriminator.step()
+                optimizer_discriminator.clear_grad()
             else:
                 losses_discriminator = {}
             
@@ -222,7 +223,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             
             # print log
             if _step % 20 == 0:
-                logging.info('Epoch:%i\tstep: %i\tLr:%1.7f' % (epoch, _step, optimizer_generator.current_step_lr()))
+                logging.info('Epoch:%i\tstep: %i\tLr:%1.7f' % (epoch, _step, optimizer_generator.get_lr()))
                 logging.info('\t'.join(['%s:%1.4f' % (k, v) for k, v in losses.items()]))
         
         # save
@@ -260,7 +261,6 @@ if __name__ == "__main__":
     kp_detector = KPDetector(**config['model_params']['kp_detector_params'], **config['model_params']['common_params'])
 
     dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'])
-    dataset = DatasetRepeater(dataset, config['train_params']['num_repeats'])
     if opt.preload:
         logging.info('PreLoad Dataset: Start')
         pre_list = list(range(len(dataset)))
@@ -271,6 +271,7 @@ if __name__ == "__main__":
             dataset.buffed[i] = v.copy()
             buf[idx] = None
         logging.info('PreLoad Dataset: End')
+    dataset = DatasetRepeater(dataset, config['train_params']['num_repeats'])
 
     if opt.mode == 'train':
         logging.info("Start training...")
