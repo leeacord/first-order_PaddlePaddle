@@ -7,7 +7,6 @@ import paddle.nn.functional as F
 def kp2gaussian(kp, spatial_size, kp_variance: np.ndarray) -> np.ndarray:
     """
     Transform a keypoint into gaussian like representation
-    BP is supported
     """
     mean = kp['value']
     coordinate_grid = make_coordinate_grid(spatial_size, mean.dtype)
@@ -20,7 +19,6 @@ def kp2gaussian(kp, spatial_size, kp_variance: np.ndarray) -> np.ndarray:
     # Preprocess kp shape
     shape = tuple(mean.shape)[:number_of_leading_dimensions] + (1, 1, 2)
     mean = kp['value'].reshape(shape)
-
     mean_sub = (coordinate_grid - mean)
     kp_variance = paddle.to_tensor(np.array([kp_variance]).astype(np.float32))
     out = paddle.exp(-0.5 * (mean_sub ** 2).sum(-1) / kp_variance)
@@ -49,7 +47,6 @@ class ResBlock2d(paddle.nn.Layer):
     """
     Res block, preserve spatial resolution.
     """
-
     def __init__(self, in_features, kernel_size, padding, **kwargs):
         super(ResBlock2d, self).__init__(**kwargs)
         self.conv1 = nn.Conv2D(in_features, in_features, kernel_size=kernel_size, padding=padding)
@@ -72,7 +69,6 @@ class UpBlock2d(paddle.nn.Layer):
     """
     Upsampling block for use in decoder.
     """
-
     def __init__(self, in_features, out_features, kernel_size=3, padding=1, groups=1):
         super(UpBlock2d, self).__init__()
         self.conv = nn.Conv2D(
@@ -95,7 +91,6 @@ class DownBlock2d(paddle.nn.Layer):
     """
     Downsampling block for use in encoder.
     """
-
     def __init__(self, in_features, out_features, kernel_size=3, padding=1, groups=1):
         super(DownBlock2d, self).__init__()
         self.conv = nn.Conv2D(in_features, out_features, kernel_size=kernel_size, padding=padding, groups=groups)
@@ -114,7 +109,6 @@ class SameBlock2d(paddle.nn.Layer):
     """
     Simple block, preserve spatial resolution.
     """
-
     def __init__(self, in_features, out_features, groups=1, kernel_size=3, padding=1):
         super(SameBlock2d, self).__init__()
         self.conv = nn.Conv2D(in_features, out_features, kernel_size=kernel_size, padding=padding, groups=groups)
@@ -131,15 +125,19 @@ class Encoder(paddle.nn.Layer):
     """
     Hourglass Encoder
     """
-
     def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256):
         super(Encoder, self).__init__()
 
         down_blocks = []
         for i in range(num_blocks):
-            down_blocks.append(DownBlock2d(in_features if i == 0 else min(max_features, block_expansion * (2 ** i)),
-                                           min(max_features, block_expansion * (2 ** (i + 1))),
-                                           kernel_size=3, padding=1))
+            down_blocks.append(
+                DownBlock2d(
+                    in_features if i == 0 else min(max_features, block_expansion * (2 ** i)),
+                    min(max_features, block_expansion * (2 ** (i + 1))),
+                    kernel_size=3,
+                    padding=1
+                )
+            )
         self.down_blocks = paddle.nn.LayerList(down_blocks)
 
     def forward(self, x):
@@ -153,12 +151,9 @@ class Decoder(paddle.nn.Layer):
     """
     Hourglass Decoder
     """
-
     def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256):
         super(Decoder, self).__init__()
-
         up_blocks = []
-
         for i in range(num_blocks)[::-1]:
             in_filters = (1 if i == num_blocks - 1 else 2) * min(max_features, block_expansion * (2 ** (i + 1)))
             out_filters = min(max_features, block_expansion * (2 ** i))
@@ -181,7 +176,6 @@ class Hourglass(paddle.nn.Layer):
     """
     Hourglass architecture.
     """
-
     def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256):
         super(Hourglass, self).__init__()
         self.encoder = Encoder(block_expansion, in_features, num_blocks, max_features)
@@ -192,12 +186,10 @@ class Hourglass(paddle.nn.Layer):
         return self.decoder(self.encoder(x))
 
 
-# TODO: 20200810
 class AntiAliasInterpolation2d(paddle.nn.Layer):
     """
     Band-limited downsampling, for better preservation of the input signal.
     """
-
     def __init__(self, channels, scale):
         super(AntiAliasInterpolation2d, self).__init__()
         sigma = (1 / scale - 1) / 2
@@ -232,9 +224,7 @@ class AntiAliasInterpolation2d(paddle.nn.Layer):
     def forward(self, input):
         if self.scale == 1.0:
             return input
-        
         out = F.pad(input, [self.ka, self.kb, self.ka, self.kb], mode='constant')
         out = self.conv(out)
-        # TODO: fluid.layers.interpolate IS NOT SAME WITH F.interpolate due to align_corners==True, use fluid.layers.resize_nearest instead.
         out = F.interpolate(out, scale_factor=self.scale, mode='NEAREST', align_corners=False)
         return out

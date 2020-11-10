@@ -81,11 +81,11 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
         if ckpt_config['generator'][-3:] == 'npz':
             G_param = np.load(ckpt_config['generator'], allow_pickle=True)['arr_0'].item()
             G_param_clean = dict([(i, G_param[i]) for i in G_param if 'num_batches_tracked' not in i])
-            # shape comparsion
             diff_num = np.array([list(i.shape) != list(j.shape) for i, j in zip(generator.state_dict().values(), G_param_clean.values())]).sum()
             if diff_num == 0:
                 # rename key
                 assign_dict = dict([(i[0], j[1]) for i, j in zip(generator.state_dict().items(), G_param_clean.items())])
+                # TODO: try generator.set_state_dict(G_param_clean, use_structured_name=False)
                 generator.set_state_dict(assign_dict, use_structured_name=False)
                 logging.info('Generator is loaded from *.npz')
             else:
@@ -103,6 +103,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             KD_param = np.load(ckpt_config['kp'], allow_pickle=True)['arr_0'].item()
             KD_param_clean = [(i, KD_param[i]) for i in KD_param if 'num_batches_tracked' not in i]
             parameter_cleans = kp_detector.parameters()
+            # TODO: try kp_detector.set_state_dict(KD_param_clean, use_structured_name=False)
             for v, b in zip(parameter_cleans, KD_param_clean):
                 v.set_value(b[1])
             logging.info('KP is loaded from *.npz')

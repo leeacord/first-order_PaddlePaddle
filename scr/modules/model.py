@@ -139,10 +139,7 @@ class Transform:
         grid = make_coordinate_grid(frame.shape[2:], 'float32').unsqueeze(0)
         grid = grid.reshape((1, frame.shape[2] * frame.shape[3], 2))
         grid = self.warp_coordinates(grid).reshape((self.bs, frame.shape[2], frame.shape[3], 2))
-        if TEST_MODE:
-            return F.grid_sample(frame, grid, mode='bilinear', padding_mode='reflection', align_corners=True)
-        else:
-            return F.grid_sample(frame, grid, mode='bilinear', padding_mode='reflection', align_corners=True)
+        return F.grid_sample(frame, grid, mode='bilinear', padding_mode='reflection', align_corners=True)
     
     def warp_coordinates(self, coordinates):
         theta = self.theta.astype('float32')
@@ -153,7 +150,7 @@ class Transform:
         # In PDPD, it should be done manually
         theta_part_a = theta[:, :, :, :2]
         theta_part_b = theta[:, :, :, 2:]
-        # TODO: paddle.matmul have no double_grad_op
+        # TODO: paddle.matmul have no double_grad_op, use 'paddle.fluid.layers.matmul'
         transformed = paddle.fluid.layers.matmul(*broadcast_v1(theta_part_a, coordinates)) + theta_part_b
         transformed = transformed.squeeze(-1)
         if self.tps:
@@ -197,9 +194,7 @@ class GeneratorFullModel(paddle.nn.Layer):
         self.scales = train_params['scales']
         self.disc_scales = self.discriminator.scales
         self.pyramid = ImagePyramide(self.scales, generator.num_channels)
-        
         self.loss_weights = train_params['loss_weights']
-        
         if sum(self.loss_weights['perceptual']) != 0:
             self.vgg = Vgg19()
     

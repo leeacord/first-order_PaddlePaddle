@@ -1,7 +1,6 @@
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
-
 from modules.util import kp2gaussian
 
 

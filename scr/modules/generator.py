@@ -1,14 +1,8 @@
-import logging
-
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
 from modules.dense_motion import DenseMotionNetwork
 from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d
-
-TEST_MODE = False
-if TEST_MODE:
-    logging.warning('TEST MODE: Output of fluid.layers.grid_sampler is 2. generator:L83')
 
 
 class OcclusionAwareGenerator(paddle.nn.Layer):
@@ -61,13 +55,7 @@ class OcclusionAwareGenerator(paddle.nn.Layer):
             deformation = paddle.transpose(deformation, (0, 3, 1, 2))
             deformation = F.interpolate(deformation, size=(h, w), mode='BILINEAR', align_corners=False)
             deformation = paddle.transpose(deformation, (0, 2, 3, 1))
-        if TEST_MODE:
-            bf = F.grid_sample(inp, deformation, mode='bilinear', padding_mode='zeros',
-                                             align_corners=True)
-            return bf
-        else:
-            return F.grid_sample(inp, deformation, mode='bilinear', padding_mode='zeros',
-                                             align_corners=True)
+        return F.grid_sample(inp, deformation, mode='bilinear', padding_mode='zeros', align_corners=True)
     
     def forward(self, source_image, kp_driving, kp_source):
         # Encoding (downsampling) part
