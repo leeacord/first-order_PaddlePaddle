@@ -1,11 +1,11 @@
+import imageio
 import logging
-import os
-import sys
-from argparse import ArgumentParser
-
 import numpy as np
+import os
 import paddle
+import sys
 import yaml
+from argparse import ArgumentParser
 from frames_dataset import FramesDataset, DatasetRepeater
 from modules.discriminator import MultiScaleDiscriminator
 from modules.generator import OcclusionAwareGenerator
@@ -23,6 +23,96 @@ if TEST_MODE:
     logging.warning('TEST MODE: train.py')
     # fake_input可随意指定,此处的batchsize=2
     fake_input = np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (2, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))  #Shape:[2, 3, 256, 256]
+
+
+def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector=None, optimizer_kp_detector=None,
+              discriminator=None, optimizer_discriminator=None):
+    has_key = lambda key: key in ckpt_config.keys() and ckpt_config[key] is not None
+    if has_key('generator') and generator is not None:
+        if ckpt_config['generator'][-3:] == 'npz':
+            G_param = np.load(ckpt_config['generator'], allow_pickle=True)['arr_0'].item()
+            G_param_clean = dict([(i, G_param[i]) for i in G_param if 'num_batches_tracked' not in i])
+            diff_num = np.array([list(i.shape) != list(j.shape) for i, j in
+                                 zip(generator.state_dict().values(), G_param_clean.values())]).sum()
+            if diff_num == 0:
+                # rename key
+                assign_dict = dict(
+                    [(i[0], j[1]) for i, j in zip(generator.state_dict().items(), G_param_clean.items())])
+                # TODO: try generator.set_state_dict(G_param_clean, use_structured_name=False)
+                generator.set_state_dict(assign_dict, use_structured_name=False)
+                logging.info('Generator is loaded from *.npz')
+            else:
+                logging.warning('Generator cannot load from *.npz')
+        else:
+            param, optim = fluid.load_dygraph(ckpt_config['generator'])
+            generator.set_dict(param)
+            if optim is not None and optimizer_generator is not None:
+                optimizer_generator.set_state_dict(optim)
+            else:
+                logging.info('Optimizer of G is not loaded')
+            logging.info('Generator is loaded from *.pdparams')
+    if has_key('kp') and kp_detector is not None:
+        if ckpt_config['kp'][-3:] == 'npz':
+            KD_param = np.load(ckpt_config['kp'], allow_pickle=True)['arr_0'].item()
+            KD_param_clean = [(i, KD_param[i]) for i in KD_param if 'num_batches_tracked' not in i]
+            parameter_cleans = kp_detector.parameters()
+            # TODO: try kp_detector.set_state_dict(KD_param_clean, use_structured_name=False)
+            for v, b in zip(parameter_cleans, KD_param_clean):
+                v.set_value(b[1])
+            logging.info('KP is loaded from *.npz')
+        else:
+            param, optim = fluid.load_dygraph(ckpt_config['kp'])
+            kp_detector.set_dict(param)
+            if optim is not None and optimizer_kp_detector is not None:
+                optimizer_kp_detector.set_state_dict(optim)
+            else:
+                logging.info('Optimizer of KP is not loaded')
+            logging.info('KP is loaded from *.pdparams')
+    if has_key('discriminator') and discriminator is not None:
+        if ckpt_config['discriminator'][-3:] == 'npz':
+            D_param = np.load(ckpt_config['discriminator'], allow_pickle=True)['arr_0'].item()
+            if 'NULL Place' in ckpt_config['discriminator']:
+                # 针对未开启spectral_norm的Fashion数据集模型
+                ## fashion数据集的默认设置中未启用spectral_norm，但其官方ckpt文件中存在spectral_norm特有的参数 需要重排顺序
+                ## 已提相关issue，作者回应加了sn也没什么影响 https://github.com/AliaksandrSiarohin/first-order-model/issues/264
+                ## 若在配置文件中开启sn则可通过else语句中的常规方法读取，故现已在配置中开启sn。
+                D_param_clean = [(i, D_param[i]) for i in D_param if
+                                 'num_batches_tracked' not in i and 'weight_v' not in i and 'weight_u' not in i]
+                for idx in range(len(D_param_clean) // 2):
+                    if 'conv.bias' in D_param_clean[idx * 2][0]:
+                        D_param_clean[idx * 2], D_param_clean[idx * 2 + 1] = D_param_clean[idx * 2 + 1], \
+                                                                             D_param_clean[
+                                                                                 idx * 2]
+                parameter_clean = discriminator.parameters()
+                for v, b in zip(parameter_clean, D_param_clean):
+                    v.set_value(b[1])
+            else:
+                D_param_clean = list(D_param.items())
+                parameter_clean = discriminator.parameters()
+                assert len(D_param_clean) == len(parameter_clean)
+                # 调换顺序
+                ## PP中:        [conv.weight,   conv.bias,          weight_u, weight_v]
+                ## pytorch中:   [conv.bias,     conv.weight_orig,   weight_u, weight_v]
+                for idx in range(len(parameter_clean)):
+                    if list(parameter_clean[idx].shape) == list(D_param_clean[idx][1].shape):
+                        parameter_clean[idx].set_value(D_param_clean[idx][1])
+                    elif parameter_clean[idx].name.split('.')[-1] == 'w_0' and D_param_clean[idx + 1][0].split('.')[
+                        -1] == 'weight_orig':
+                        parameter_clean[idx].set_value(D_param_clean[idx + 1][1])
+                    elif parameter_clean[idx].name.split('.')[-1] == 'b_0' and D_param_clean[idx - 1][0].split('.')[
+                        -1] == 'bias':
+                        parameter_clean[idx].set_value(D_param_clean[idx - 1][1])
+                    else:
+                        logging.error('Error', idx)
+            logging.info('Discriminator is loaded from *.npz')
+        else:
+            param, optim = fluid.load_dygraph(ckpt_config['discriminator'])
+            discriminator.set_dict(param)
+            if optim is not None and optimizer_discriminator is not None:
+                optimizer_discriminator.set_state_dict(optim)
+            else:
+                logging.info('Optimizer of Discriminator is not loaded')
+            logging.info('Discriminator is loaded from *.pdparams')
 
 
 def train(config, generator, discriminator, kp_detector, save_dir, dataset):
@@ -77,89 +167,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     ###### Restore Part ######
     ckpt_config = config['ckpt_model']
     has_key = lambda key: key in ckpt_config.keys() and ckpt_config[key] is not None
-    if has_key('generator'):
-        if ckpt_config['generator'][-3:] == 'npz':
-            G_param = np.load(ckpt_config['generator'], allow_pickle=True)['arr_0'].item()
-            G_param_clean = dict([(i, G_param[i]) for i in G_param if 'num_batches_tracked' not in i])
-            diff_num = np.array([list(i.shape) != list(j.shape) for i, j in zip(generator.state_dict().values(), G_param_clean.values())]).sum()
-            if diff_num == 0:
-                # rename key
-                assign_dict = dict([(i[0], j[1]) for i, j in zip(generator.state_dict().items(), G_param_clean.items())])
-                # TODO: try generator.set_state_dict(G_param_clean, use_structured_name=False)
-                generator.set_state_dict(assign_dict, use_structured_name=False)
-                logging.info('Generator is loaded from *.npz')
-            else:
-                logging.warning('Generator cannot load from *.npz')
-        else:
-            param, optim = fluid.load_dygraph(ckpt_config['generator'])
-            generator.set_dict(param)
-            if optim is not None:
-                optimizer_generator.set_state_dict(optim)
-            else:
-                logging.info('Optimizer of G is not loaded')
-            logging.info('Generator is loaded from *.pdparams')
-    if has_key('kp'):
-        if ckpt_config['kp'][-3:] == 'npz':
-            KD_param = np.load(ckpt_config['kp'], allow_pickle=True)['arr_0'].item()
-            KD_param_clean = [(i, KD_param[i]) for i in KD_param if 'num_batches_tracked' not in i]
-            parameter_cleans = kp_detector.parameters()
-            # TODO: try kp_detector.set_state_dict(KD_param_clean, use_structured_name=False)
-            for v, b in zip(parameter_cleans, KD_param_clean):
-                v.set_value(b[1])
-            logging.info('KP is loaded from *.npz')
-        else:
-            param, optim = fluid.load_dygraph(ckpt_config['kp'])
-            kp_detector.set_dict(param)
-            if optim is not None:
-                optimizer_kp_detector.set_state_dict(optim)
-            else:
-                logging.info('Optimizer of KP is not loaded')
-            logging.info('KP is loaded from *.pdparams')
-    if has_key('discriminator'):
-        if ckpt_config['discriminator'][-3:] == 'npz':
-            D_param = np.load(ckpt_config['discriminator'], allow_pickle=True)['arr_0'].item()
-            if 'NULL Place' in ckpt_config['discriminator']:
-                # 针对未开启spectral_norm的Fashion数据集模型
-                ## fashion数据集的默认设置中未启用spectral_norm，但其官方ckpt文件中存在spectral_norm特有的参数 需要重排顺序
-                ## 已提相关issue，作者回应加了sn也没什么影响 https://github.com/AliaksandrSiarohin/first-order-model/issues/264
-                ## 若在配置文件中开启sn则可通过else语句中的常规方法读取，故现已在配置中开启sn。
-                D_param_clean = [(i, D_param[i]) for i in D_param if
-                                 'num_batches_tracked' not in i and 'weight_v' not in i and 'weight_u' not in i]
-                for idx in range(len(D_param_clean) // 2):
-                    if 'conv.bias' in D_param_clean[idx * 2][0]:
-                        D_param_clean[idx * 2], D_param_clean[idx * 2 + 1] = D_param_clean[idx * 2 + 1], D_param_clean[
-                            idx * 2]
-                parameter_clean = discriminator.parameters()
-                for v, b in zip(parameter_clean, D_param_clean):
-                    v.set_value(b[1])
-            else:
-                D_param_clean = list(D_param.items())
-                parameter_clean = discriminator.parameters()
-                assert len(D_param_clean) == len(parameter_clean)
-                # 调换顺序
-                ## PP中:        [conv.weight,   conv.bias,          weight_u, weight_v]
-                ## pytorch中:   [conv.bias,     conv.weight_orig,   weight_u, weight_v]
-                for idx in range(len(parameter_clean)):
-                    if list(parameter_clean[idx].shape) == list(D_param_clean[idx][1].shape):
-                        parameter_clean[idx].set_value(D_param_clean[idx][1])
-                    elif parameter_clean[idx].name.split('.')[-1] == 'w_0' and D_param_clean[idx + 1][0].split('.')[
-                        -1] == 'weight_orig':
-                        parameter_clean[idx].set_value(D_param_clean[idx + 1][1])
-                    elif parameter_clean[idx].name.split('.')[-1] == 'b_0' and D_param_clean[idx - 1][0].split('.')[
-                        -1] == 'bias':
-                        parameter_clean[idx].set_value(D_param_clean[idx - 1][1])
-                    else:
-                        print('Error', idx)
-            logging.info('Discriminator is loaded from *.npz')
-        else:
-            param, optim = fluid.load_dygraph(ckpt_config['discriminator'])
-            discriminator.set_dict(param)
-            if optim is not None:
-                optimizer_discriminator.set_state_dict(optim)
-            else:
-                logging.info('Optimizer of Discriminator is not loaded')
-            logging.info('Discriminator is loaded from *.pdparams')
-    ###### Restore Part END ######
+    load_ckpt(ckpt_config, generator, optimizer_generator, kp_detector, optimizer_kp_detector, discriminator, optimizer_discriminator)
     
     # create model
     generator_full = GeneratorFullModel(kp_detector, generator, discriminator, train_params)
@@ -238,6 +246,54 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
         kp_lr.step()
 
 
+def reconstruction(config, generator, kp_detector, dataset, save_dir='./'):
+    png_dir = os.path.join(save_dir, 'reconstruction/png')
+    log_dir = os.path.join(save_dir, 'reconstruction')
+    ckpt_config = config['ckpt_model']
+    load_ckpt(ckpt_config, generator=generator, kp_detector=kp_detector)
+    dataloader = paddle.io.DataLoader(dataset, batch_size=1, shuffle=False, drop_last=False, num_workers=4, use_buffer_reader=True, use_shared_memory=False)
+
+    if not os.path.exists(log_dir): os.makedirs(log_dir)
+    if not os.path.exists(png_dir): os.makedirs(png_dir)
+    loss_list = []
+    generator.eval()
+    kp_detector.eval()
+
+    bar = trange(config['reconstruction_params']['num_videos'])
+    logging.info('num_videos: %i' % config['reconstruction_params']['num_videos'])
+    for it, x in enumerate(dataloader()):
+        if config['reconstruction_params']['num_videos'] is not None:
+            if it > config['reconstruction_params']['num_videos']:
+                break
+        with paddle.no_grad():
+            predictions = []
+            visualizations = []
+            kp_source = kp_detector(x[0][:, :, 0])
+            for frame_idx in range(x[0].shape[2]):
+                source = x[0][:, :, 0]
+                driving = x[0][:, :, frame_idx]
+                kp_driving = kp_detector(driving)
+                out = generator(source, kp_source=kp_source, kp_driving=kp_driving)
+                del out['sparse_deformed']
+        
+                out_img = out['prediction'].detach().numpy()
+                img = (np.transpose(out_img, [0, 2, 3, 1])[0] * 255).astype(np.uint8)
+                visualizations.append(img)
+                predictions.append(img)
+                loss_list.append(np.abs(out_img - driving.numpy()).mean())
+            origin_video = np.transpose(x[0][0].numpy() * 255, (1, 2, 3, 0)).astype(np.uint8)
+            visualizations = np.stack(visualizations)
+            predictions = np.concatenate(predictions, axis=1)
+            imageio.imsave(os.path.join(png_dir, '%i' % it + '.png'), predictions)
+    
+            video_cat = np.concatenate([origin_video, visualizations], axis=1)
+            image_name = '%i' % it + config['reconstruction_params']['format']
+            imageio.mimsave(os.path.join(log_dir, image_name), list([i for i in video_cat]))
+        bar.update()
+    bar.close()
+    logging.info("Reconstruction loss: %s" % np.mean(loss_list))
+
+
 if __name__ == "__main__":
     paddle.set_device("gpu")
     logging.getLogger().setLevel(logging.INFO)
@@ -246,8 +302,7 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument("--config", required=True, help="path to config")
-    parser.add_argument("--mode", default="train", choices=["train"])
-    # parser.add_argument("--mode", default="train", choices=["train", "reconstruction", "animate"])
+    parser.add_argument("--mode", default="train", choices=["train", "reconstruction", "animate"])
     parser.add_argument("--save_dir", default='/home/aistudio/train_ckpt', help="path to save in")
     parser.add_argument("--preload", action='store_true', help="preload dataset to RAM")
     parser.set_defaults(verbose=False)
@@ -270,15 +325,15 @@ if __name__ == "__main__":
             dataset.buffed[i] = v.copy()
             buf[idx] = None
         logging.info('PreLoad Dataset: End')
-    dataset = DatasetRepeater(dataset, config['train_params']['num_repeats'])
 
     if opt.mode == 'train':
-        logging.info("Start training...")
         save_dir = opt.save_dir
+        logging.info("Start training...")
+        dataset = DatasetRepeater(dataset, config['train_params']['num_repeats'])
         train(config, generator, discriminator, kp_detector, save_dir, dataset)
-    # elif opt.mode == 'reconstruction':
-    #     print("Reconstruction...")
-    #     reconstruction(config, generator, kp_detector, opt.checkpoint, log_dir, dataset)
+    elif opt.mode == 'reconstruction':
+        logging.info("Reconstruction...")
+        reconstruction(config, generator, kp_detector, dataset)
     # elif opt.mode == 'animate':
     #     print("Animate...")
     #     animate(config, generator, kp_detector, opt.checkpoint, log_dir, dataset)

@@ -1,32 +1,30 @@
-import matplotlib
-import os, sys
-import yaml
-import paddle.fluid.dygraph as dygraph
-import paddle.fluid as fluid
-from argparse import ArgumentParser
-from tqdm import tqdm
-
 import imageio
+import logging
+import matplotlib
 import numpy as np
-from skimage.transform import resize
-from skimage import img_as_ubyte
-
+import os
+import paddle.fluid as fluid
+import paddle.fluid.dygraph as dygraph
+import sys
+import yaml
+from animate import normalize_kp
+from argparse import ArgumentParser
 from modules.generator import OcclusionAwareGenerator
 from modules.keypoint_detector import KPDetector
-from animate import normalize_kp
-
+from skimage import img_as_ubyte
+from skimage.transform import resize
+from tqdm import tqdm
 
 if sys.version_info[0] < 3:
     raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
 
-def load_checkpoints(config_path):
 
+def load_checkpoints(config_path):
     with open(config_path) as f:
         config = yaml.load(f)
     pretrain_model = config['ckpt_model']
     generator = OcclusionAwareGenerator(**config['model_params']['generator_params'],
                                         **config['model_params']['common_params'])
-
     kp_detector = KPDetector(**config['model_params']['kp_detector_params'],
                              **config['model_params']['common_params'])
     if pretrain_model['generator'] is not None:
@@ -42,7 +40,7 @@ def load_checkpoints(config_path):
         else:
             a, b = fluid.load_dygraph(pretrain_model['generator'])
             generator.set_dict(a)
-        print('Restore Pre-trained Generator')
+        logging.info('Restore Pre-trained Generator')
     if pretrain_model['kp'] is not None:
         if pretrain_model['kp'][-3:] == 'npz':
             KD_param = np.load(pretrain_model['kp'], allow_pickle=True)['arr_0'].item()
@@ -53,11 +51,11 @@ def load_checkpoints(config_path):
         else:
             a, b = fluid.load_dygraph(pretrain_model['kp'])
             kp_detector.set_dict(a)
-        print('Restore Pre-trained KD')
+        logging.info('Restore Pre-trained KD')
     generator.eval()
     kp_detector.eval()
-    
     return generator, kp_detector
+
 
 def make_animation(source_image, driving_video, generator, kp_detector, relative=True, adapt_movement_scale=True):
     with dygraph.no_grad():
@@ -103,6 +101,7 @@ def make_animation(source_image, driving_video, generator, kp_detector, relative
 #             norm = new_norm
 #             frame_num = i
 #     return frame_num
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()

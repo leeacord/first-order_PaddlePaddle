@@ -204,8 +204,9 @@ class FramesDataset(Dataset):
             out['driving'] = driving.transpose((2, 0, 1))
             out['source'] = source.transpose((2, 0, 1))
         else:
-            video = np.stack(video_array, axis=0).astype(np.float32)
+            video = np.stack(video_array, axis=0).astype(np.float32)/255.0
             out['video'] = video.transpose((3, 0, 1, 2))
+            return out['video']
         if self.process_time:
             a2 = time.process_time()
             print('Trans T:%1.5f'%(a2-a14))
