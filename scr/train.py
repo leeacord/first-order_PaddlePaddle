@@ -6,7 +6,8 @@ import paddle
 import sys
 import yaml
 from argparse import ArgumentParser
-from frames_dataset import FramesDataset, DatasetRepeater
+from animate import normalize_kp
+from frames_dataset import FramesDataset, DatasetRepeater, PairedDataset
 from modules.discriminator import MultiScaleDiscriminator
 from modules.generator import OcclusionAwareGenerator
 from modules.keypoint_detector import KPDetector
@@ -15,8 +16,6 @@ from paddle import fluid
 from paddle.optimizer.lr import MultiStepDecay
 from tqdm import trange
 
-# from reconstruction import reconstruction
-# from animate import animate
 
 TEST_MODE = False
 if TEST_MODE:
@@ -35,14 +34,10 @@ def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector
             diff_num = np.array([list(i.shape) != list(j.shape) for i, j in
                                  zip(generator.state_dict().values(), G_param_clean.values())]).sum()
             if diff_num == 0:
-                # rename key
-                assign_dict = dict(
-                    [(i[0], j[1]) for i, j in zip(generator.state_dict().items(), G_param_clean.items())])
-                # TODO: try generator.set_state_dict(G_param_clean, use_structured_name=False)
-                generator.set_state_dict(assign_dict, use_structured_name=False)
-                logging.info('Generator is loaded from *.npz')
+                generator.set_state_dict(G_param_clean, use_structured_name=False)
+                logging.info('G is loaded from *.npz')
             else:
-                logging.warning('Generator cannot load from *.npz')
+                logging.warning('G cannot load from *.npz')
         else:
             param, optim = fluid.load_dygraph(ckpt_config['generator'])
             generator.set_dict(param)
@@ -54,12 +49,14 @@ def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector
     if has_key('kp') and kp_detector is not None:
         if ckpt_config['kp'][-3:] == 'npz':
             KD_param = np.load(ckpt_config['kp'], allow_pickle=True)['arr_0'].item()
-            KD_param_clean = [(i, KD_param[i]) for i in KD_param if 'num_batches_tracked' not in i]
-            parameter_cleans = kp_detector.parameters()
-            # TODO: try kp_detector.set_state_dict(KD_param_clean, use_structured_name=False)
-            for v, b in zip(parameter_cleans, KD_param_clean):
-                v.set_value(b[1])
-            logging.info('KP is loaded from *.npz')
+            KD_param_clean = dict([(i, KD_param[i]) for i in KD_param if 'num_batches_tracked' not in i])
+            diff_num = np.array([list(i.shape) != list(j.shape) for i, j in
+                                 zip(kp_detector.state_dict().values(), KD_param_clean.values())]).sum()
+            if diff_num == 0:
+                kp_detector.set_state_dict(KD_param_clean, use_structured_name=False)
+                logging.info('KP is loaded from *.npz')
+            else:
+                logging.warning('KP cannot load from *.npz')
         else:
             param, optim = fluid.load_dygraph(ckpt_config['kp'])
             kp_detector.set_dict(param)
@@ -294,6 +291,64 @@ def reconstruction(config, generator, kp_detector, dataset, save_dir='./'):
     logging.info("Reconstruction loss: %s" % np.mean(loss_list))
 
 
+def animate(config, generator, kp_detector, dataset, save_dir='./'):
+    log_dir = os.path.join(save_dir, 'animation')
+    png_dir = os.path.join(save_dir, 'animation/png')
+    animate_params = config['animate_params']
+
+    dataset = PairedDataset(initial_dataset=dataset, number_of_pairs=animate_params['num_pairs'])
+    dataloader = paddle.io.DataLoader(dataset, batch_size=1, shuffle=False, drop_last=False, num_workers=4, use_buffer_reader=True, use_shared_memory=False)
+
+    ckpt_config = config['ckpt_model']
+    load_ckpt(ckpt_config, generator=generator, kp_detector=kp_detector)
+
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    if not os.path.exists(png_dir):
+        os.makedirs(png_dir)
+
+    generator.eval()
+    kp_detector.eval()
+    bar = trange(animate_params['num_pairs'])
+    logging.info('num_pairs: %i' % animate_params['num_pairs'])
+    for it, x in enumerate(dataloader):
+        bar.update()
+        with paddle.no_grad():
+            predictions = []
+            visualizations = []
+
+            driving_video = x[0]
+            source_frame = x[1]
+
+            kp_source = kp_detector(source_frame)
+            kp_driving_initial = kp_detector(driving_video[:, :, 0])
+
+            for frame_idx in range(driving_video.shape[2]):
+                driving_frame = driving_video[:, :, frame_idx]
+                kp_driving = kp_detector(driving_frame)
+                kp_norm = normalize_kp(kp_source=kp_source, kp_driving=kp_driving,
+                                       kp_driving_initial=kp_driving_initial, **animate_params['normalization_params'])
+                out = generator(source_frame, kp_source=kp_source, kp_driving=kp_norm)
+
+                out['kp_driving'] = kp_driving
+                out['kp_source'] = kp_source
+                out['kp_norm'] = kp_norm
+                del out['sparse_deformed']
+                out_img = out['prediction'].detach().numpy()
+                img = (np.transpose(out_img, [0, 2, 3, 1])[0] * 255).astype(np.uint8)
+                visualizations.append(img)
+                predictions.append(img)
+
+            origin_video = np.transpose(x[0][0].numpy() * 255, (1, 2, 3, 0)).astype(np.uint8)
+            visualizations = np.stack(visualizations)
+            predictions = np.concatenate(predictions, axis=1)
+            imageio.imsave(os.path.join(png_dir, '%i' % it + '.png'), predictions)
+
+            video_cat = np.concatenate([origin_video, visualizations], axis=1)
+            image_name = '%i' % it + animate_params['format']
+            imageio.mimsave(os.path.join(log_dir, image_name), list([i for i in video_cat]))
+
+
 if __name__ == "__main__":
     paddle.set_device("gpu")
     logging.getLogger().setLevel(logging.INFO)
@@ -334,6 +389,6 @@ if __name__ == "__main__":
     elif opt.mode == 'reconstruction':
         logging.info("Reconstruction...")
         reconstruction(config, generator, kp_detector, dataset)
-    # elif opt.mode == 'animate':
-    #     print("Animate...")
-    #     animate(config, generator, kp_detector, opt.checkpoint, log_dir, dataset)
+    elif opt.mode == 'animate':
+        logging.info("Animate...")
+        animate(config, generator, kp_detector, dataset)

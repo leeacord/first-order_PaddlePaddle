@@ -1,19 +1,18 @@
-import imageio
 import logging
-import matplotlib
-import numpy as np
-import os
-import paddle.fluid as fluid
-import paddle.fluid.dygraph as dygraph
 import sys
+from argparse import ArgumentParser
+
+import imageio
+import numpy as np
+import paddle
 import yaml
 from animate import normalize_kp
-from argparse import ArgumentParser
 from modules.generator import OcclusionAwareGenerator
 from modules.keypoint_detector import KPDetector
 from skimage import img_as_ubyte
 from skimage.transform import resize
 from tqdm import tqdm
+from train import load_ckpt
 
 if sys.version_info[0] < 3:
     raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
@@ -27,41 +26,17 @@ def load_checkpoints(config_path):
                                         **config['model_params']['common_params'])
     kp_detector = KPDetector(**config['model_params']['kp_detector_params'],
                              **config['model_params']['common_params'])
-    if pretrain_model['generator'] is not None:
-        if pretrain_model['generator'][-3:] == 'npz':
-            G_param = np.load(pretrain_model['generator'], allow_pickle=True)['arr_0'].item()
-            G_param_clean = dict([(i, G_param[i]) for i in G_param if 'num_batches_tracked' not in i])
-            diff_num = np.array([list(i.shape) != list(j.shape) for i, j in zip(generator.state_dict().values(), G_param_clean.values())]).sum()
-            if diff_num == 0:
-                # rename key
-                assign_dict = dict([(i[0], j[1]) for i, j in zip(generator.state_dict().items(), G_param_clean.items())])
-                # TODO: try generator.set_state_dict(G_param_clean, use_structured_name=False)
-                generator.set_state_dict(assign_dict, use_structured_name=False)
-        else:
-            a, b = fluid.load_dygraph(pretrain_model['generator'])
-            generator.set_dict(a)
-        logging.info('Restore Pre-trained Generator')
-    if pretrain_model['kp'] is not None:
-        if pretrain_model['kp'][-3:] == 'npz':
-            KD_param = np.load(pretrain_model['kp'], allow_pickle=True)['arr_0'].item()
-            KD_param_clean = [(i, KD_param[i]) for i in KD_param if 'num_batches_tracked' not in i]
-            parameter_clean = kp_detector.parameters()
-            for p, v in zip(parameter_clean, KD_param_clean):
-                p.set_value(v[1])
-        else:
-            a, b = fluid.load_dygraph(pretrain_model['kp'])
-            kp_detector.set_dict(a)
-        logging.info('Restore Pre-trained KD')
+    load_ckpt(pretrain_model, generator=generator, kp_detector=kp_detector)
     generator.eval()
     kp_detector.eval()
     return generator, kp_detector
 
 
 def make_animation(source_image, driving_video, generator, kp_detector, relative=True, adapt_movement_scale=True):
-    with dygraph.no_grad():
+    with paddle.no_grad():
         predictions = []
-        source = dygraph.to_variable(np.transpose(source_image[np.newaxis], (0, 3, 1, 2)).astype(np.float32))
-        driving = dygraph.to_variable(np.transpose(np.array(driving_video)[np.newaxis], (0, 4, 1, 2, 3)).astype(np.float32))
+        source = paddle.to_tensor(np.transpose(source_image[np.newaxis], (0, 3, 1, 2)).astype(np.float32))
+        driving = paddle.to_tensor(np.transpose(np.array(driving_video)[np.newaxis], (0, 4, 1, 2, 3)).astype(np.float32))
         kp_source = kp_detector(source)
         kp_driving_initial = kp_detector(driving[:, :, 0])
 
@@ -125,7 +100,7 @@ if __name__ == "__main__":
     parser.set_defaults(adapt_scale=False)
 
     opt = parser.parse_args()
-
+    logging.getLogger().setLevel(logging.INFO)
     source_image = imageio.imread(opt.source_image)
     reader = imageio.get_reader(opt.driving_video)
     try:
@@ -142,13 +117,12 @@ if __name__ == "__main__":
     reader.close()
 
     if opt.cpu:
-        plac = fluid.CPUPlace()
+        paddle.set_device("cpu")
     else:
-        plac = fluid.CUDAPlace(0)
-    with dygraph.guard(plac):
-        source_image = resize(source_image, (256, 256))[..., :3]
-        driving_video = [resize(frame, (256, 256))[..., :3] for frame in driving_video]
-        generator, kp_detector = load_checkpoints(config_path=opt.config)
+        paddle.set_device("gpu")
+    source_image = resize(source_image, (256, 256))[..., :3]
+    driving_video = [resize(frame, (256, 256))[..., :3] for frame in driving_video]
+    generator, kp_detector = load_checkpoints(config_path=opt.config)
 
         # if opt.find_best_frame or opt.best_frame is not None:
         #     i = opt.best_frame if opt.best_frame is not None else find_best_frame(source_image, driving_video, cpu=opt.cpu)
@@ -161,7 +135,7 @@ if __name__ == "__main__":
         # else:
         #     predictions = make_animation(source_image, driving_video, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, cpu=opt.cpu)
         
-        predictions = make_animation(source_image, driving_video, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale)
+    predictions = make_animation(source_image, driving_video, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale)
     if video_mode:
         imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in predictions], fps=fps)
     else:
