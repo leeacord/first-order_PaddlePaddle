@@ -83,7 +83,7 @@ class DenseMotionNetwork(nn.Layer):
         source_repeat = paddle.tile(source_image.unsqueeze(1).unsqueeze(1), (self.num_kp + 1, 1, 1, 1, 1))
         source_repeat = source_repeat.reshape((bs * (self.num_kp + 1), -1, h, w))
         sparse_motions = sparse_motions.reshape((bs * (self.num_kp + 1), h, w, -1))
-        # TODO: fluid.layers.grid_sampler align_corners==True!!!
+        # Important: grid_sampler(..., align_corners=True) in pytorch 1.0
         sparse_deformed = F.grid_sample(source_repeat, sparse_motions, mode='bilinear', padding_mode='zeros', align_corners=True)
         sparse_deformed = sparse_deformed.reshape((bs, self.num_kp + 1, -1, h, w))
         return sparse_deformed

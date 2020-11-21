@@ -103,7 +103,8 @@ class FramesDataset(Dataset):
         return len(self.videos)
 
     def colorize(self, image, hue):
-        """色相调整 输入范围[-1, 1]
+        """Hue disturbance
+        input range: [-1, 1]
         """
         res = rgb_to_hsv(image)
         res[:, :, 0] = res[:, :, 0] + hue
@@ -113,7 +114,7 @@ class FramesDataset(Dataset):
         return res
     
     def preload(self, idx):
-        """返回idx号索引的全部图片
+        """return the $idx$-th video
         """
         if self.is_train and self.id_sampling:
             name = self.videos[idx]
@@ -128,7 +129,7 @@ class FramesDataset(Dataset):
         if self.process_time:
             a0 = time.process_time()
         if self.is_train and self.id_sampling:
-            # id_sampling 选项未测试，fashion/bair/mgif中均为false
+            # id_sampling=True is not tested, because id_sampling in mgif/bair/fashion are False
             name = self.videos[idx]
             path = np.random.choice(glob.glob(os.path.join(self.root_dir, name + '*.mp4')))
         else:
@@ -141,6 +142,8 @@ class FramesDataset(Dataset):
             num_frames = len(frames)
             frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
             video_array = [io.imread(os.path.join(path, frames[idx])) for idx in frame_idx]
+            
+            # convert to 3-channel image
             if video_array[0].shape[-1]==4:
                 video_array = [i[..., :3] for i in video_array]
             elif video_array[0].shape[-1]==1:
@@ -165,7 +168,7 @@ class FramesDataset(Dataset):
             print('Load T:%1.5f'%(a1-a0))
         out = {}
 
-        # 数据增强
+        # Dataset enhancement
         if self.is_train:
             source = np.array(video_array[0], dtype='float32')/255.0  # shape is [H, W, C]
             driving = np.array(video_array[1], dtype='float32')/255.0 # shape is [H, W, C]
@@ -272,7 +275,4 @@ class PairedDataset(Dataset):
         pair = self.pairs[idx]
         first = self.initial_dataset[pair[0]]  # 'driving'
         second = self.initial_dataset[pair[1]] # 'source':[channel, frame, h, w]
-        # first = {'driving_' + key: value for key, value in first.items()}
-        # second = {'source_' + key: value for key, value in second.items()}
-
         return first, second[:, 0, :, :]
