@@ -19,7 +19,7 @@ from tqdm import trange
 
 TEST_MODE = False
 if TEST_MODE:
-    logging.warning('TEST MODE: train.py')
+    logging.warning('TEST MODE: run.py')
     fake_batch_size = 2
     fake_input = np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (fake_batch_size, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))  #Shape:[fake_batch_size, 3, 256, 256]
 
@@ -124,7 +124,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                            milestones=train_params['epoch_milestones'], gamma=0.1)
     # optimer
     if TEST_MODE:
-        logging.warning('TEST MODE: Optimer is SGD, lr is 0.001. train.py: L50')
+        logging.warning('TEST MODE: Optimer is SGD, lr is 0.001. run.py: L50')
         optimizer_generator = paddle.optimizer.SGD(
             parameters=generator.parameters(),
             learning_rate=0.001
@@ -192,7 +192,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             x['driving'], x['source'] = _x
             x['name'] = ['NULL'] * _x[0].shape[0]
             if TEST_MODE:
-                logging.warning('TEST MODE: Input is Fixed train.py: L207')
+                logging.warning('TEST MODE: Input is Fixed run.py: L207')
                 x['driving'] = paddle.to_tensor(fake_input)
                 x['source'] = paddle.to_tensor(fake_input)
                 x['name'] = ['test1', 'test2']
