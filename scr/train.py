@@ -1,12 +1,12 @@
-import imageio
 import logging
-import numpy as np
 import os
-import paddle
 import sys
-import yaml
 from argparse import ArgumentParser
-from animate import normalize_kp
+
+import imageio
+import numpy as np
+import paddle
+import yaml
 from frames_dataset import FramesDataset, DatasetRepeater, PairedDataset
 from modules.discriminator import MultiScaleDiscriminator
 from modules.generator import OcclusionAwareGenerator
@@ -14,14 +14,14 @@ from modules.keypoint_detector import KPDetector
 from modules.model import GeneratorFullModel, DiscriminatorFullModel
 from paddle import fluid
 from paddle.optimizer.lr import MultiStepDecay
+from scipy.spatial import ConvexHull
 from tqdm import trange
-
 
 TEST_MODE = False
 if TEST_MODE:
     logging.warning('TEST MODE: train.py')
-    # fake_input可随意指定,此处的batchsize=2
-    fake_input = np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (2, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))  #Shape:[2, 3, 256, 256]
+    fake_batch_size = 2
+    fake_input = np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (fake_batch_size, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))  #Shape:[fake_batch_size, 3, 256, 256]
 
 
 def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector=None, optimizer_kp_detector=None,
@@ -87,9 +87,9 @@ def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector
                 D_param_clean = list(D_param.items())
                 parameter_clean = discriminator.parameters()
                 assert len(D_param_clean) == len(parameter_clean)
-                # 调换顺序
-                ## PP中:        [conv.weight,   conv.bias,          weight_u, weight_v]
-                ## pytorch中:   [conv.bias,     conv.weight_orig,   weight_u, weight_v]
+                # resort
+                ## PP:        [conv.weight,   conv.bias,          weight_u, weight_v]
+                ## pytorch:   [conv.bias,     conv.weight_orig,   weight_u, weight_v]
                 for idx in range(len(parameter_clean)):
                     if list(parameter_clean[idx].shape) == list(D_param_clean[idx][1].shape):
                         parameter_clean[idx].set_value(D_param_clean[idx][1])
@@ -158,17 +158,19 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
         start_epoch = 0
     logging.info('Start Epoch is :%i' % start_epoch)
     
-    # dataset pipeline
+    # dataset
     dataloader = paddle.io.DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True, drop_last=False, num_workers=4, use_buffer_reader=True, use_shared_memory=False)
-
-    ###### Restore Part ######
+    
+    # load checkpoint
     ckpt_config = config['ckpt_model']
     has_key = lambda key: key in ckpt_config.keys() and ckpt_config[key] is not None
     load_ckpt(ckpt_config, generator, optimizer_generator, kp_detector, optimizer_kp_detector, discriminator, optimizer_discriminator)
     
-    # create model
+    # create full model
     generator_full = GeneratorFullModel(kp_detector, generator, discriminator, train_params)
     discriminator_full = DiscriminatorFullModel(kp_detector, generator, discriminator, train_params)
+    
+    # load vgg19
     if has_key('vgg19_model'):
         vggVarList = [i for i in generator_full.vgg.parameters()]
         paramset = np.load(ckpt_config['vgg19_model'], allow_pickle=True)['arr_0']
@@ -178,10 +180,13 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             else:
                 logging.warning('VGG19 cannot be loaded')
         logging.info('Pre-trained VGG19 is loaded from *.npz')
+
+    # train
     generator_full.train()
     discriminator_full.train()
     for epoch in trange(start_epoch, train_params['num_epochs']):
         for _step, _x in enumerate(dataloader()):
+            
             # prepare data
             x = dict()
             x['driving'], x['source'] = _x
@@ -191,6 +196,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
                 x['driving'] = paddle.to_tensor(fake_input)
                 x['source'] = paddle.to_tensor(fake_input)
                 x['name'] = ['test1', 'test2']
+            
             # train generator
             losses_generator, generated = generator_full(x.copy())
             loss_values = [val.sum() for val in losses_generator.values()]
@@ -289,6 +295,27 @@ def reconstruction(config, generator, kp_detector, dataset, save_dir='./'):
         bar.update()
     bar.close()
     logging.info("Reconstruction loss: %s" % np.mean(loss_list))
+
+
+def normalize_kp(kp_source, kp_driving, kp_driving_initial, adapt_movement_scale=False,
+                 use_relative_movement=False, use_relative_jacobian=False):
+    if adapt_movement_scale:
+        source_area = ConvexHull(kp_source['value'][0].numpy()).volume
+        driving_area = ConvexHull(kp_driving_initial['value'][0].numpy()).volume
+        adapt_movement_scale = np.sqrt(source_area) / np.sqrt(driving_area)
+    else:
+        adapt_movement_scale = 1
+
+    kp_new = {k: v for k, v in kp_driving.items()}
+
+    if use_relative_movement:
+        kp_value_diff = (kp_driving['value'] - kp_driving_initial['value'])
+        kp_value_diff *= adapt_movement_scale
+        kp_new['value'] = kp_value_diff + kp_source['value']
+        if use_relative_jacobian:
+            jacobian_diff = paddle.matmul(kp_driving['jacobian'], paddle.inverse(kp_driving_initial['jacobian']))
+            kp_new['jacobian'] = paddle.matmul(jacobian_diff, kp_source['jacobian'])
+    return kp_new
 
 
 def animate(config, generator, kp_detector, dataset, save_dir='./'):

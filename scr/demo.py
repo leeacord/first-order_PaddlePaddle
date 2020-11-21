@@ -6,13 +6,12 @@ import imageio
 import numpy as np
 import paddle
 import yaml
-from animate import normalize_kp
 from modules.generator import OcclusionAwareGenerator
 from modules.keypoint_detector import KPDetector
 from skimage import img_as_ubyte
 from skimage.transform import resize
 from tqdm import tqdm
-from train import load_ckpt
+from train import load_ckpt, normalize_kp
 
 if sys.version_info[0] < 3:
     raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
