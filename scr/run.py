@@ -159,7 +159,8 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     logging.info('Start Epoch is :%i' % start_epoch)
     
     # dataset
-    dataloader = paddle.io.DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True, drop_last=False, num_workers=4, use_buffer_reader=True, use_shared_memory=False)
+    if not TEST_MODE:
+        dataloader = paddle.io.DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True, drop_last=False, num_workers=4, use_buffer_reader=True, use_shared_memory=False)
     
     # load checkpoint
     ckpt_config = config['ckpt_model']
@@ -185,17 +186,18 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     generator_full.train()
     discriminator_full.train()
     for epoch in trange(start_epoch, train_params['num_epochs']):
-        for _step, _x in enumerate(dataloader()):
+        for _step, _x in enumerate(dataloader() if not TEST_MODE else range(100)):
             
             # prepare data
             x = dict()
-            x['driving'], x['source'] = _x
-            x['name'] = ['NULL'] * _x[0].shape[0]
             if TEST_MODE:
                 logging.warning('TEST MODE: Input is Fixed run.py: L207')
                 x['driving'] = paddle.to_tensor(fake_input)
                 x['source'] = paddle.to_tensor(fake_input)
                 x['name'] = ['test1', 'test2']
+            else:
+                x['driving'], x['source'] = _x
+                x['name'] = ['NULL'] * _x[0].shape[0]
             
             # train generator
             losses_generator, generated = generator_full(x.copy())
@@ -395,23 +397,26 @@ if __name__ == "__main__":
     generator = OcclusionAwareGenerator(**config['model_params']['generator_params'], **config['model_params']['common_params'])
     discriminator = MultiScaleDiscriminator(**config['model_params']['discriminator_params'], **config['model_params']['common_params'])
     kp_detector = KPDetector(**config['model_params']['kp_detector_params'], **config['model_params']['common_params'])
-
-    dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'])
-    if opt.preload:
-        logging.info('PreLoad Dataset: Start')
-        pre_list = list(range(len(dataset)))
-        import multiprocessing.pool as pool
-        with pool.Pool(4) as pl:
-            buf = pl.map(dataset.preload, pre_list)
-        for idx, (i,v) in enumerate(zip(pre_list, buf)):
-            dataset.buffed[i] = v.copy()
-            buf[idx] = None
-        logging.info('PreLoad Dataset: End')
+    if not TEST_MODE:
+        dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'])
+        if opt.preload:
+            logging.info('PreLoad Dataset: Start')
+            pre_list = list(range(len(dataset)))
+            import multiprocessing.pool as pool
+            with pool.Pool(4) as pl:
+                buf = pl.map(dataset.preload, pre_list)
+            for idx, (i,v) in enumerate(zip(pre_list, buf)):
+                dataset.buffed[i] = v.copy()
+                buf[idx] = None
+            logging.info('PreLoad Dataset: End')
 
     if opt.mode == 'train':
         save_dir = opt.save_dir
         logging.info("Start training...")
-        dataset = DatasetRepeater(dataset, config['train_params']['num_repeats'])
+        if TEST_MODE:
+            dataset = None
+        else:
+            dataset = DatasetRepeater(dataset, config['train_params']['num_repeats'])
         train(config, generator, discriminator, kp_detector, save_dir, dataset)
     elif opt.mode == 'reconstruction':
         logging.info("Reconstruction...")
