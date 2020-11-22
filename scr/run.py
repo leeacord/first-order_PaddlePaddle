@@ -379,7 +379,6 @@ def animate(config, generator, kp_detector, dataset, save_dir='./'):
 
 
 if __name__ == "__main__":
-    paddle.set_device("gpu")
     logging.getLogger().setLevel(logging.INFO)
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
@@ -389,11 +388,13 @@ if __name__ == "__main__":
     parser.add_argument("--mode", default="train", choices=["train", "reconstruction", "animate"])
     parser.add_argument("--save_dir", default='/home/aistudio/train_ckpt', help="path to save in")
     parser.add_argument("--preload", action='store_true', help="preload dataset to RAM")
+    parser.add_argument("--cpu", dest="cpu", action="store_true", help="cpu mode.")
     parser.set_defaults(verbose=False)
     opt = parser.parse_args()
     with open(opt.config) as f:
         config = yaml.load(f)
-
+    paddle.set_device("cpu" if opt.cpu else "gpu")
+    
     generator = OcclusionAwareGenerator(**config['model_params']['generator_params'], **config['model_params']['common_params'])
     discriminator = MultiScaleDiscriminator(**config['model_params']['discriminator_params'], **config['model_params']['common_params'])
     kp_detector = KPDetector(**config['model_params']['kp_detector_params'], **config['model_params']['common_params'])
