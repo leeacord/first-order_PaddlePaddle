@@ -13,7 +13,7 @@ if TEST_MODE:
 aistudio上运行训练：
 
 ```bash
-cd ./src
+cd ./scr
 pip install scikit-image scipy
 # use gpu
 python run.py --config ./config/test-256.yaml
