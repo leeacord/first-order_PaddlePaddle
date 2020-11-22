@@ -21,7 +21,7 @@ TEST_MODE = False
 if TEST_MODE:
     logging.warning('TEST MODE: run.py')
     fake_batch_size = 2
-    fake_input = np.transpose(np.tile(np.load('/home/aistudio/img.npy')[:1, ...], (fake_batch_size, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))  #Shape:[fake_batch_size, 3, 256, 256]
+    fake_input = np.transpose(np.tile(np.load('./img.npy')[:1, ...], (fake_batch_size, 1, 1, 1)).astype(np.float32)/255, (0, 3, 1, 2))  #Shape:[fake_batch_size, 3, 256, 256]
 
 
 def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector=None, optimizer_kp_detector=None,
