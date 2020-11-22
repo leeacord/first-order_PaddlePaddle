@@ -1,6 +1,5 @@
 dataset_params:
-  # 数据集路径，请保证该目录下有train和test两个子文件夹，并将数据与对应置入
-  root_dir: /home/aistudio/work/dataset/moving-gif
+  root_dir:
   frame_shape: [256, 256, 3]
   id_sampling: False
   augmentation_params:
@@ -13,27 +12,14 @@ dataset_params:
       ratio: [0.9, 1.1]
     jitter_param:
       hue: 0.5
+
 ckpt_model:
-  # start_epoch 仅在恢复训练时需要填写
-  start_epoch: 
-  # vgg19_model 为与原文一致采用原文的预训练模型
-  vgg19_model: /home/aistudio/work/pre-trained/vgg19_np.npz
-  # generator/discriminator/kp同时兼容pytorch的预训练模型（采用npz作为中转载体）和paddle的检查点（pdparams则为pp检查点）
-  
-  # 使用原文预训练模型
-  generator: /home/aistudio/work/pre-trained/mgif/G_param.npz
-  discriminator: /home/aistudio/work/pre-trained/mgif/D_param.npz
-  kp: /home/aistudio/work/pre-trained/mgif/KP_param.npz
-  
-#  PP训练模型
-#  generator: /G.pdparams
-#  discriminator: /D.pdparams
-#  kp: /KP.pdparams
-#
-#  从头训练
-#  generator:
-#  discriminator:
-#  kp:
+  start_epoch:
+  vgg19_model:
+  generator:
+  discriminator:
+  kp:
+
 model_params:
   common_params:
     num_kp: 10
@@ -71,7 +57,6 @@ train_params:
   lr_generator: 2.0e-4
   lr_discriminator: 2.0e-4
   lr_kp_detector: 2.0e-4
- 
   batch_size: 16
   scales: [1, 0.5, 0.25, 0.125]
   checkpoint_freq: 100
@@ -86,7 +71,6 @@ train_params:
     perceptual: [10, 10, 10, 10, 10]
     equivariance_value: 10
     equivariance_jacobian: 10
-
 
 reconstruction_params:
   num_videos: 1000
