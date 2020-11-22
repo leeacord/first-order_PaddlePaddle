@@ -10,10 +10,11 @@ if TEST_MODE:
     ......
 ```
 
-运行训练：
+aistudio上运行训练：
 
 ```bash
 cd ./src
+pip install scikit-image scipy
 # use gpu
 python run.py --config ./config/test-256.yaml
 # use cpu
