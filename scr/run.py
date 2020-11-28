@@ -27,6 +27,7 @@ if TEST_MODE:
 def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector=None, optimizer_kp_detector=None,
               discriminator=None, optimizer_discriminator=None):
     has_key = lambda key: key in ckpt_config.keys() and ckpt_config[key] is not None
+    new_dict = lambda name, valu: dict([(k2, v1) for (k1, v1), (k2, v2) in zip(valu.items(), name.items())])
     if has_key('generator') and generator is not None:
         if ckpt_config['generator'][-3:] == 'npz':
             G_param = np.load(ckpt_config['generator'], allow_pickle=True)['arr_0'].item()
@@ -34,7 +35,7 @@ def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector
             diff_num = np.array([list(i.shape) != list(j.shape) for i, j in
                                  zip(generator.state_dict().values(), G_param_clean.values())]).sum()
             if diff_num == 0:
-                generator.set_state_dict(G_param_clean, use_structured_name=False)
+                generator.set_state_dict(new_dict(generator.state_dict(), G_param_clean))
                 logging.info('G is loaded from *.npz')
             else:
                 logging.warning('G cannot load from *.npz')
@@ -53,7 +54,7 @@ def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector
             diff_num = np.array([list(i.shape) != list(j.shape) for i, j in
                                  zip(kp_detector.state_dict().values(), KD_param_clean.values())]).sum()
             if diff_num == 0:
-                kp_detector.set_state_dict(KD_param_clean, use_structured_name=False)
+                kp_detector.set_state_dict(new_dict(kp_detector.state_dict(), KD_param_clean))
                 logging.info('KP is loaded from *.npz')
             else:
                 logging.warning('KP cannot load from *.npz')
