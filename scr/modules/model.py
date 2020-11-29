@@ -139,6 +139,9 @@ class Transform:
         grid = make_coordinate_grid(frame.shape[2:], 'float32').unsqueeze(0)
         grid = grid.reshape((1, frame.shape[2] * frame.shape[3], 2))
         grid = self.warp_coordinates(grid).reshape((self.bs, frame.shape[2], frame.shape[3], 2))
+        # TODO: bug?
+        frame.stop_gradient = False
+        grid.stop_gradient = False
         return F.grid_sample(frame, grid, mode='bilinear', padding_mode='reflection', align_corners=True)
     
     def warp_coordinates(self, coordinates):
