@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 import sys
 from argparse import ArgumentParser
 
@@ -17,7 +18,11 @@ from paddle.optimizer.lr import MultiStepDecay
 from scipy.spatial import ConvexHull
 from tqdm import trange
 
+VISUAL = False
 TEST_MODE = False
+if VISUAL:
+    from visualdl import LogWriter
+    writer = LogWriter(logdir="./log/fashion/train")
 if TEST_MODE:
     logging.warning('TEST MODE: run.py')
     fake_batch_size = 2
@@ -113,7 +118,8 @@ def load_ckpt(ckpt_config, generator=None, optimizer_generator=None, kp_detector
             logging.info('Discriminator is loaded from *.pdparams')
 
 
-def train(config, generator, discriminator, kp_detector, save_dir, dataset):
+def train(config, generator, discriminator, kp_detector, save_dir: Path, dataset):
+
     train_params = config['train_params']
     
     # learning_rate_scheduler
@@ -186,6 +192,7 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
     # train
     generator_full.train()
     discriminator_full.train()
+    global_step = 0
     for epoch in trange(start_epoch, train_params['num_epochs']):
         for _step, _x in enumerate(dataloader() if not TEST_MODE else range(100)):
             
@@ -233,34 +240,77 @@ def train(config, generator, discriminator, kp_detector, save_dir, dataset):
             losses_generator.update(losses_discriminator)
             losses = {key: value.mean().detach().numpy() for key, value in losses_generator.items()}
             
+            if VISUAL and _step % 3 == 0:
+                writer.add_scalar(tag="lr", step=global_step, value=optimizer_generator.get_lr())
+                for k, v in losses.items():
+                    writer.add_scalar(tag=k, step=global_step, value=v)
+            
             # print log
             if _step % 20 == 0:
                 logging.info('Epoch:%i\tstep: %i\tLr:%1.7f' % (epoch, _step, optimizer_generator.get_lr()))
                 logging.info('\t'.join(['%s:%1.4f' % (k, v) for k, v in losses.items()]))
+
+            global_step += 1
         
         # save
         if epoch % 3 == 0:
-            paddle.fluid.save_dygraph(generator.state_dict(), os.path.join(save_dir, 'epoch%i/G' % epoch))
-            paddle.fluid.save_dygraph(discriminator.state_dict(), os.path.join(save_dir, 'epoch%i/D' % epoch))
-            paddle.fluid.save_dygraph(kp_detector.state_dict(), os.path.join(save_dir, 'epoch%i/KP' % epoch))
-            paddle.fluid.save_dygraph(optimizer_generator.state_dict(), os.path.join(save_dir, 'epoch%i/G' % epoch))
-            paddle.fluid.save_dygraph(optimizer_discriminator.state_dict(), os.path.join(save_dir, 'epoch%i/D' % epoch))
-            paddle.fluid.save_dygraph(optimizer_kp_detector.state_dict(), os.path.join(save_dir, 'epoch%i/KP' % epoch))
-            logging.info('Model is saved to:%s' % os.path.join(save_dir, 'epoch%i/' % epoch))
+            paddle.fluid.save_dygraph(generator.state_dict(), save_dir.joinpath('epoch%i/G' % epoch).__str__())
+            paddle.fluid.save_dygraph(discriminator.state_dict(), save_dir.joinpath('epoch%i/D' % epoch).__str__())
+            paddle.fluid.save_dygraph(kp_detector.state_dict(), save_dir.joinpath('epoch%i/KP' % epoch).__str__())
+            paddle.fluid.save_dygraph(optimizer_generator.state_dict(), save_dir.joinpath('epoch%i/G' % epoch).__str__())
+            paddle.fluid.save_dygraph(optimizer_discriminator.state_dict(), save_dir.joinpath('epoch%i/D' % epoch).__str__())
+            paddle.fluid.save_dygraph(optimizer_kp_detector.state_dict(), save_dir.joinpath('epoch%i/KP' % epoch).__str__())
+            logging.info('Model is saved to:%s' % save_dir.joinpath('epoch%i/' % epoch))
         gen_lr.step()
         dis_lr.step()
         kp_lr.step()
 
+        # eval model
+        generator_full.eval()
+        discriminator_full.eval()
+        kp_detector.eval()
+        generator.eval()
+        with paddle.no_grad():
+            full_video_source = np.stack([imageio.imread(i).astype(np.float32) / 255 for i in sorted(
+                list(dataset.dataset.videos[0].iterdir()))])
+            full_video = paddle.to_tensor(np.transpose(full_video_source, (3, 0, 1, 2))[np.newaxis, ...])
+            predictions = []
+            loss_list = []
+            kp_source = kp_detector(full_video[:, :, 0])
+            for frame_idx in range(full_video.shape[2]):
+                source = full_video[:, :, 0]
+                driving = full_video[:, :, frame_idx]
+                kp_driving = kp_detector(driving)
+                out = generator(source, kp_source=kp_source, kp_driving=kp_driving)
+                del out['sparse_deformed']
+        
+                out_img = out['prediction'].detach().numpy()
+                img = (np.transpose(out_img, [0, 2, 3, 1])[0] * 255).astype(np.uint8)
+                predictions.append(img)
+                loss_list.append(np.abs(out_img - driving.numpy()).mean())
+            orig = (np.concatenate(full_video_source, axis=1) * 255).astype(np.uint8)
+            predictions = np.concatenate(predictions, axis=1)
+            predictions = np.concatenate([orig, predictions], axis=0)
+            imageio.imsave(save_dir.joinpath('epoch%i.png' % epoch), predictions)
+            if VISUAL:
+                writer.add_image(tag='reconstruction_img', img=predictions, step=global_step)
+                writer.add_scalar(tag='reconstruction', step=global_step, value=np.mean(loss_list))
+        kp_detector.train()
+        generator.train()
+        generator_full.train()
+        discriminator_full.train()
+        
 
-def reconstruction(config, generator, kp_detector, dataset, save_dir='./'):
-    png_dir = os.path.join(save_dir, 'reconstruction/png')
-    log_dir = os.path.join(save_dir, 'reconstruction')
+
+def reconstruction(config, generator, kp_detector, dataset, save_dir=Path('./')):
+    png_dir = save_dir.joinpath('reconstruction/png')
+    log_dir = save_dir.joinpath('reconstruction')
     ckpt_config = config['ckpt_model']
     load_ckpt(ckpt_config, generator=generator, kp_detector=kp_detector)
     dataloader = paddle.io.DataLoader(dataset, batch_size=1, shuffle=False, drop_last=False, num_workers=4, use_buffer_reader=True, use_shared_memory=False)
 
-    if not os.path.exists(log_dir): os.makedirs(log_dir)
-    if not os.path.exists(png_dir): os.makedirs(png_dir)
+    if not log_dir.exists(): log_dir.mkdir()
+    if not png_dir.exists(): png_dir.mkdir()
     loss_list = []
     generator.eval()
     kp_detector.eval()
@@ -290,11 +340,11 @@ def reconstruction(config, generator, kp_detector, dataset, save_dir='./'):
             origin_video = np.transpose(x[0][0].numpy() * 255, (1, 2, 3, 0)).astype(np.uint8)
             visualizations = np.stack(visualizations)
             predictions = np.concatenate(predictions, axis=1)
-            imageio.imsave(os.path.join(png_dir, '%i' % it + '.png'), predictions)
+            imageio.imsave(png_dir.joinpath('%i' % it + '.png'), predictions)
     
             video_cat = np.concatenate([origin_video, visualizations], axis=1)
             image_name = '%i' % it + config['reconstruction_params']['format']
-            imageio.mimsave(os.path.join(log_dir, image_name), list([i for i in video_cat]))
+            imageio.mimsave(log_dir.joinpath(image_name), list([i for i in video_cat]))
         bar.update()
     bar.close()
     logging.info("Reconstruction loss: %s" % np.mean(loss_list))
@@ -321,9 +371,9 @@ def normalize_kp(kp_source, kp_driving, kp_driving_initial, adapt_movement_scale
     return kp_new
 
 
-def animate(config, generator, kp_detector, dataset, save_dir='./'):
-    log_dir = os.path.join(save_dir, 'animation')
-    png_dir = os.path.join(save_dir, 'animation/png')
+def animate(config, generator, kp_detector, dataset, save_dir=Path('./')):
+    log_dir = save_dir.joinpath('animation')
+    png_dir = save_dir.joinpath('animation/png')
     animate_params = config['animate_params']
 
     dataset = PairedDataset(initial_dataset=dataset, number_of_pairs=animate_params['num_pairs'])
@@ -332,10 +382,8 @@ def animate(config, generator, kp_detector, dataset, save_dir='./'):
     ckpt_config = config['ckpt_model']
     load_ckpt(ckpt_config, generator=generator, kp_detector=kp_detector)
 
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    if not os.path.exists(png_dir):
-        os.makedirs(png_dir)
+    if not log_dir.exists(): log_dir.mkdir()
+    if not png_dir.exists(): png_dir.mkdir()
 
     generator.eval()
     kp_detector.eval()
@@ -372,11 +420,11 @@ def animate(config, generator, kp_detector, dataset, save_dir='./'):
             origin_video = np.transpose(x[0][0].numpy() * 255, (1, 2, 3, 0)).astype(np.uint8)
             visualizations = np.stack(visualizations)
             predictions = np.concatenate(predictions, axis=1)
-            imageio.imsave(os.path.join(png_dir, '%i' % it + '.png'), predictions)
+            imageio.imsave(png_dir.joinpath('%i' % it + '.png'), predictions)
 
             video_cat = np.concatenate([origin_video, visualizations], axis=1)
             image_name = '%i' % it + animate_params['format']
-            imageio.mimsave(os.path.join(log_dir, image_name), list([i for i in video_cat]))
+            imageio.mimsave(log_dir.joinpath(image_name), list([i for i in video_cat]))
 
 
 if __name__ == "__main__":
@@ -411,8 +459,8 @@ if __name__ == "__main__":
                 buf[idx] = None
             logging.info('PreLoad Dataset: End')
 
+    save_dir = Path(opt.save_dir)
     if opt.mode == 'train':
-        save_dir = opt.save_dir
         logging.info("Start training...")
         if TEST_MODE:
             dataset = None
@@ -421,7 +469,7 @@ if __name__ == "__main__":
         train(config, generator, discriminator, kp_detector, save_dir, dataset)
     elif opt.mode == 'reconstruction':
         logging.info("Reconstruction...")
-        reconstruction(config, generator, kp_detector, dataset)
+        reconstruction(config, generator, kp_detector, dataset, save_dir=save_dir)
     elif opt.mode == 'animate':
         logging.info("Animate...")
-        animate(config, generator, kp_detector, dataset)
+        animate(config, generator, kp_detector, dataset, save_dir=save_dir)
